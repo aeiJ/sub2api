@@ -149,14 +149,6 @@ apiClient.interceptors.response.use(
       }
 
       if (status === 423 && apiData.code === 'ADMIN_COMPLIANCE_ACK_REQUIRED') {
-        try {
-          window.dispatchEvent(new CustomEvent('admin-compliance-required', {
-            detail: apiData.metadata || {}
-          }))
-        } catch {
-          // ignore event failures
-        }
-
         return Promise.reject({
           status,
           code: apiData.code,
