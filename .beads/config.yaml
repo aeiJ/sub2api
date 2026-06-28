@@ -1,0 +1,13 @@
+# Beads Configuration File
+# This file configures default behavior for bd commands in this repository.
+
+issue-prefix: "sub2api"
+
+export:
+  auto: false
+  path: issues.jsonl
+  interval: 60s
+  git-add: false
+
+import:
+  path: issues.jsonl
