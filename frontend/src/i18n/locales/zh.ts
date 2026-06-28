@@ -709,6 +709,8 @@ export default {
     searchPlaceholder: '搜索名称或Key...',
     endpoints: {
       title: 'API 端点',
+      claude: 'Claude',
+      gpt: 'GPT',
       default: '默认',
       copied: '已复制',
       copiedHint: '已复制到剪贴板',

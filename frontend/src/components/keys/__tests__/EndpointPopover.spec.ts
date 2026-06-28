@@ -5,6 +5,8 @@ const copyToClipboard = vi.fn().mockResolvedValue(true)
 
 const messages: Record<string, string> = {
   'keys.endpoints.title': 'API 端点',
+  'keys.endpoints.claude': 'Claude',
+  'keys.endpoints.gpt': 'GPT',
   'keys.endpoints.default': '默认',
   'keys.endpoints.copied': '已复制',
   'keys.endpoints.copiedHint': '已复制到剪贴板',
@@ -31,6 +33,35 @@ describe('EndpointPopover', () => {
     vi.clearAllMocks()
   })
 
+  it('渲染 Claude 和 GPT 默认复制地址，GPT 自动追加 /v1', () => {
+    const wrapper = mount(EndpointPopover, {
+      props: {
+        apiBaseUrl: 'https://default.example.com',
+        customEndpoints: [],
+      },
+    })
+
+    expect(wrapper.text()).toContain('Claude')
+    expect(wrapper.text()).toContain('https://default.example.com')
+    expect(wrapper.text()).toContain('GPT')
+    expect(wrapper.text()).toContain('https://default.example.com/v1')
+    expect(wrapper.find('a').exists()).toBe(false)
+    expect(wrapper.find('[data-generated="true"]').classes()).not.toContain('border')
+  })
+
+  it('GPT 默认复制地址不会重复追加 /v1', () => {
+    const wrapper = mount(EndpointPopover, {
+      props: {
+        apiBaseUrl: 'https://default.example.com/v1',
+        customEndpoints: [],
+      },
+    })
+
+    expect(wrapper.text()).toContain('https://default.example.com')
+    expect(wrapper.text()).toContain('https://default.example.com/v1')
+    expect(wrapper.text()).not.toContain('https://default.example.com/v1/v1')
+  })
+
   it('将说明提示渲染到 URL 上方而不是旧的 title 图标上', () => {
     const wrapper = mount(EndpointPopover, {
       props: {
@@ -49,12 +80,13 @@ describe('EndpointPopover', () => {
     expect(wrapper.text()).toContain('点击可复制此端点')
     expect(wrapper.find('[role="button"]').attributes('title')).toBeUndefined()
     expect(wrapper.find('[title="自定义说明"]').exists()).toBe(false)
+    expect(wrapper.find('a[title="测速"]').exists()).toBe(true)
   })
 
   it('点击 URL 后会复制并切换为已复制提示', async () => {
     const wrapper = mount(EndpointPopover, {
       props: {
-        apiBaseUrl: 'https://default.example.com/v1',
+        apiBaseUrl: 'https://default.example.com',
         customEndpoints: [],
       },
     })
@@ -62,7 +94,7 @@ describe('EndpointPopover', () => {
     await wrapper.find('[role="button"]').trigger('click')
     await flushPromises()
 
-    expect(copyToClipboard).toHaveBeenCalledWith('https://default.example.com/v1', '已复制')
+    expect(copyToClipboard).toHaveBeenCalledWith('https://default.example.com', '已复制')
     expect(wrapper.text()).toContain('已复制到剪贴板')
     expect(wrapper.find('button[aria-label="已复制到剪贴板"]').exists()).toBe(true)
   })
