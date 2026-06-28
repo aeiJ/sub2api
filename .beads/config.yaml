@@ -11,3 +11,5 @@ export:
 
 import:
   path: issues.jsonl
+
+sync.remote: "git+https://github.com/Wei-Shaw/sub2api.git"
