@@ -65,6 +65,10 @@ function simulateGuard(
   toMeta: Record<string, any>,
   authState: MockAuthState
 ): string | null {
+  if (typeof toMeta.redirect === 'string') {
+    return toMeta.redirect
+  }
+
   const requiresAuth = toMeta.requiresAuth !== false
   const requiresAdmin = toMeta.requiresAdmin === true
 
@@ -185,8 +189,13 @@ describe('路由守卫逻辑', () => {
       expect(redirect).toBeNull()
     })
 
-    it('访问 /home 公开页面允许通过', () => {
-      const redirect = simulateGuard('/home', { requiresAuth: false }, authState)
+    it('访问根路径重定向到 /login', () => {
+      const redirect = simulateGuard('/', { redirect: '/login' }, authState)
+      expect(redirect).toBe('/login')
+    })
+
+    it('访问 /login 公开页面允许通过', () => {
+      const redirect = simulateGuard('/login', { requiresAuth: false }, authState)
       expect(redirect).toBeNull()
     })
   })
@@ -336,7 +345,7 @@ describe('路由守卫逻辑', () => {
   })
 
   describe('Backend Mode', () => {
-    it('unauthenticated: /home redirects to /login', () => {
+    it('unauthenticated: root redirects to /login', () => {
       const authState: MockAuthState = {
         isAuthenticated: false,
         isAdmin: false,
@@ -344,7 +353,7 @@ describe('路由守卫逻辑', () => {
         backendModeEnabled: true,
         hasPendingAuthSession: false,
       }
-      const redirect = simulateGuard('/home', { requiresAuth: false }, authState)
+      const redirect = simulateGuard('/', { redirect: '/login' }, authState)
       expect(redirect).toBe('/login')
     })
 
