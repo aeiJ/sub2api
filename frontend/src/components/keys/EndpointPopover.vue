@@ -6,7 +6,6 @@ import Icon from '@/components/icons/Icon.vue'
 import type { CustomEndpoint } from '@/types'
 
 const props = defineProps<{
-  apiBaseUrl: string
   customEndpoints: CustomEndpoint[]
 }>()
 
@@ -16,55 +15,11 @@ const copiedEndpoint = ref<string | null>(null)
 
 let copiedResetTimer: number | undefined
 
-type EndpointItem = {
-  name: string
-  endpoint: string
-  description: string
-  isGenerated: boolean
-  showSpeedTest: boolean
-}
-
-function normalizeBaseUrl(url: string): string {
-  return url.trim().replace(/\/+$/, '')
-}
-
-function stripV1Suffix(url: string): string {
-  return url.replace(/\/v1$/i, '')
-}
-
-function appendV1(url: string): string {
-  return stripV1Suffix(url) + '/v1'
-}
-
-const generatedBaseUrl = computed(() => {
-  const base = normalizeBaseUrl(props.apiBaseUrl || '')
-  if (base) return stripV1Suffix(base)
-  const origin = typeof window === 'undefined' ? '' : normalizeBaseUrl(window.location.origin || '')
-  return stripV1Suffix(origin)
-})
-
 const allEndpoints = computed(() => {
-  const items: EndpointItem[] = []
-  if (generatedBaseUrl.value) {
-    items.push({
-      name: t('keys.endpoints.claude'),
-      endpoint: generatedBaseUrl.value,
-      description: '',
-      isGenerated: true,
-      showSpeedTest: false,
-    })
-    items.push({
-      name: t('keys.endpoints.gpt'),
-      endpoint: appendV1(generatedBaseUrl.value),
-      description: '',
-      isGenerated: true,
-      showSpeedTest: false,
-    })
-  }
-  for (const ep of props.customEndpoints) {
-    items.push({ ...ep, isGenerated: false, showSpeedTest: true })
-  }
-  return items
+  return props.customEndpoints.map((ep) => ({
+    ...ep,
+    showSpeedTest: true,
+  }))
 })
 
 async function copy(url: string) {
@@ -104,11 +59,7 @@ onBeforeUnmount(() => {
     <div
       v-for="(item, index) in allEndpoints"
       :key="index"
-      :data-generated="item.isGenerated ? 'true' : 'false'"
-      class="flex min-w-0 items-center gap-1.5 text-xs transition-colors"
-      :class="item.isGenerated
-        ? 'py-1'
-        : 'rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 hover:border-primary-200 dark:border-dark-600 dark:bg-dark-800 dark:hover:border-primary-700'"
+      class="flex min-w-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs transition-colors hover:border-primary-200 dark:border-dark-600 dark:bg-dark-800 dark:hover:border-primary-700"
     >
       <span class="shrink-0 font-medium text-gray-600 dark:text-gray-300">{{ item.name }}</span>
       <span class="text-gray-300 dark:text-dark-500">|</span>

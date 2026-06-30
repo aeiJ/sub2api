@@ -3,9 +3,7 @@
     <TablePageLayout>
       <template #filters>
         <div class="flex flex-col gap-3">
-          <!-- Always shown: generated Claude/GPT shortcuts derive from api_base_url and are always available -->
           <EndpointPopover
-            :api-base-url="publicSettings?.api_base_url || ''"
             :custom-endpoints="publicSettings?.custom_endpoints || []"
           />
           <div class="flex flex-wrap items-center gap-3">

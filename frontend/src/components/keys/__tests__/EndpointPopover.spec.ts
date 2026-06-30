@@ -5,8 +5,6 @@ const copyToClipboard = vi.fn().mockResolvedValue(true)
 
 const messages: Record<string, string> = {
   'keys.endpoints.title': 'API 端点',
-  'keys.endpoints.claude': 'Claude',
-  'keys.endpoints.gpt': 'GPT',
   'keys.endpoints.default': '默认',
   'keys.endpoints.copied': '已复制',
   'keys.endpoints.copiedHint': '已复制到剪贴板',
@@ -33,39 +31,9 @@ describe('EndpointPopover', () => {
     vi.clearAllMocks()
   })
 
-  it('渲染 Claude 和 GPT 默认复制地址，GPT 自动追加 /v1', () => {
+  it('渲染自定义端点并保留说明、复制和测速按钮', () => {
     const wrapper = mount(EndpointPopover, {
       props: {
-        apiBaseUrl: 'https://default.example.com',
-        customEndpoints: [],
-      },
-    })
-
-    expect(wrapper.text()).toContain('Claude')
-    expect(wrapper.text()).toContain('https://default.example.com')
-    expect(wrapper.text()).toContain('GPT')
-    expect(wrapper.text()).toContain('https://default.example.com/v1')
-    expect(wrapper.find('a').exists()).toBe(false)
-    expect(wrapper.find('[data-generated="true"]').classes()).not.toContain('border')
-  })
-
-  it('GPT 默认复制地址不会重复追加 /v1', () => {
-    const wrapper = mount(EndpointPopover, {
-      props: {
-        apiBaseUrl: 'https://default.example.com/v1',
-        customEndpoints: [],
-      },
-    })
-
-    expect(wrapper.text()).toContain('https://default.example.com')
-    expect(wrapper.text()).toContain('https://default.example.com/v1')
-    expect(wrapper.text()).not.toContain('https://default.example.com/v1/v1')
-  })
-
-  it('将说明提示渲染到 URL 上方而不是旧的 title 图标上', () => {
-    const wrapper = mount(EndpointPopover, {
-      props: {
-        apiBaseUrl: 'https://default.example.com/v1',
         customEndpoints: [
           {
             name: '备用线路',
@@ -86,8 +54,13 @@ describe('EndpointPopover', () => {
   it('点击 URL 后会复制并切换为已复制提示', async () => {
     const wrapper = mount(EndpointPopover, {
       props: {
-        apiBaseUrl: 'https://default.example.com',
-        customEndpoints: [],
+        customEndpoints: [
+          {
+            name: '备用线路',
+            endpoint: 'https://default.example.com',
+            description: '',
+          },
+        ],
       },
     })
 

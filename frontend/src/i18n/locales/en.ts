@@ -710,8 +710,6 @@ export default {
     searchPlaceholder: 'Search name or key...',
     endpoints: {
       title: 'API Endpoints',
-      claude: 'Claude',
-      gpt: 'GPT',
       default: 'Default',
       copied: 'Copied',
       copiedHint: 'Copied to clipboard',
