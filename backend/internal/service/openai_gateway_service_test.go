@@ -872,7 +872,51 @@ func TestOpenAISelectAccountWithLoadAwareness_StickyWaitPlan(t *testing.T) {
 	}
 }
 
-func TestOpenAISelectAccountWithLoadAwareness_PrefersLowerLoad(t *testing.T) {
+func TestOpenAISelectAccountWithLoadAwareness_StickyBusySwitchesWhenLoadBatchDisabled(t *testing.T) {
+	sessionHash := "sticky-busy-load-batch-disabled"
+	groupID := int64(1)
+	repo := stubOpenAIAccountRepo{
+		accounts: []Account{
+			{ID: 1, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 1},
+			{ID: 2, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 2},
+		},
+	}
+	cache := &stubGatewayCache{
+		sessionBindings: map[string]int64{"openai:" + sessionHash: 1},
+	}
+	concurrencyCache := stubConcurrencyCache{
+		acquireResults: map[int64]bool{1: false, 2: true},
+		waitCounts:     map[int64]int{1: 999},
+	}
+	cfg := &config.Config{}
+	cfg.Gateway.Scheduling.LoadBatchEnabled = false
+
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cache:              cache,
+		cfg:                cfg,
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, sessionHash, "gpt-4", nil)
+	if err != nil {
+		t.Fatalf("SelectAccountWithLoadAwareness error: %v", err)
+	}
+	if selection == nil || selection.Account == nil || selection.Account.ID != 2 {
+		t.Fatalf("expected account 2, got %+v", selection)
+	}
+	if selection.WaitPlan != nil || !selection.Acquired {
+		t.Fatalf("expected acquired switched account")
+	}
+	if cache.sessionBindings["openai:"+sessionHash] != 2 {
+		t.Fatalf("expected sticky session rebound to account 2")
+	}
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAISelectAccountWithLoadAwareness_DedicatedIgnoresLowerLoad(t *testing.T) {
 	groupID := int64(1)
 	repo := stubOpenAIAccountRepo{
 		accounts: []Account{
@@ -898,10 +942,10 @@ func TestOpenAISelectAccountWithLoadAwareness_PrefersLowerLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectAccountWithLoadAwareness error: %v", err)
 	}
-	if selection == nil || selection.Account == nil || selection.Account.ID != 2 {
-		t.Fatalf("expected account 2")
+	if selection == nil || selection.Account == nil || selection.Account.ID != 1 {
+		t.Fatalf("expected dedicated account 1")
 	}
-	if cache.sessionBindings["openai:load"] != 2 {
+	if cache.sessionBindings["openai:load"] != 1 {
 		t.Fatalf("expected sticky session updated")
 	}
 }
@@ -1015,6 +1059,7 @@ func TestOpenAISelectAccountWithLoadAwareness_AllFullWaitPlan(t *testing.T) {
 	}
 	cache := &stubGatewayCache{}
 	concurrencyCache := stubConcurrencyCache{
+		acquireResults: map[int64]bool{1: false},
 		loadMap: map[int64]*AccountLoadInfo{
 			1: {AccountID: 1, LoadRate: 100},
 		},
@@ -1032,6 +1077,9 @@ func TestOpenAISelectAccountWithLoadAwareness_AllFullWaitPlan(t *testing.T) {
 	}
 	if selection == nil || selection.WaitPlan == nil {
 		t.Fatalf("expected wait plan")
+	}
+	if selection.Account == nil || selection.Account.ID != 1 {
+		t.Fatalf("expected dedicated account 1")
 	}
 }
 
@@ -1089,12 +1137,12 @@ func TestOpenAISelectAccountWithLoadAwareness_MissingLoadInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectAccountWithLoadAwareness error: %v", err)
 	}
-	if selection == nil || selection.Account == nil || selection.Account.ID != 2 {
-		t.Fatalf("expected account 2")
+	if selection == nil || selection.Account == nil || selection.Account.ID != 1 {
+		t.Fatalf("expected dedicated account 1")
 	}
 }
 
-func TestOpenAISelectAccountForModelWithExclusions_LeastRecentlyUsed(t *testing.T) {
+func TestOpenAISelectAccountForModelWithExclusions_DedicatedIgnoresLastUsed(t *testing.T) {
 	oldTime := time.Now().Add(-2 * time.Hour)
 	newTime := time.Now().Add(-1 * time.Hour)
 	repo := stubOpenAIAccountRepo{
@@ -1114,12 +1162,12 @@ func TestOpenAISelectAccountForModelWithExclusions_LeastRecentlyUsed(t *testing.
 	if err != nil {
 		t.Fatalf("SelectAccountForModelWithExclusions error: %v", err)
 	}
-	if acc == nil || acc.ID != 2 {
-		t.Fatalf("expected account 2")
+	if acc == nil || acc.ID != 1 {
+		t.Fatalf("expected dedicated account 1")
 	}
 }
 
-func TestOpenAISelectAccountWithLoadAwareness_PreferNeverUsed(t *testing.T) {
+func TestOpenAISelectAccountWithLoadAwareness_DedicatedIgnoresNeverUsed(t *testing.T) {
 	groupID := int64(1)
 	lastUsed := time.Now().Add(-1 * time.Hour)
 	repo := stubOpenAIAccountRepo{
@@ -1146,8 +1194,8 @@ func TestOpenAISelectAccountWithLoadAwareness_PreferNeverUsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectAccountWithLoadAwareness error: %v", err)
 	}
-	if selection == nil || selection.Account == nil || selection.Account.ID != 2 {
-		t.Fatalf("expected account 2")
+	if selection == nil || selection.Account == nil || selection.Account.ID != 1 {
+		t.Fatalf("expected dedicated account 1")
 	}
 }
 
