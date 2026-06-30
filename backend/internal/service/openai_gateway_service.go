@@ -1337,8 +1337,8 @@ func normalizeOpenAICompatiblePlatform(platform string) string {
 // still satisfying errors.Is(err, ErrNoAvailableAccounts).
 type noAvailableOpenAIErr struct{ msg string }
 
-func (e *noAvailableOpenAIErr) Error() string  { return e.msg }
-func (e *noAvailableOpenAIErr) Unwrap() error  { return ErrNoAvailableAccounts }
+func (e *noAvailableOpenAIErr) Error() string { return e.msg }
+func (e *noAvailableOpenAIErr) Unwrap() error { return ErrNoAvailableAccounts }
 
 func noAvailableOpenAISelectionError(requestedModel string, compactBlocked bool) error {
 	if compactBlocked {
