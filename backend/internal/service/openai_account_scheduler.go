@@ -141,6 +141,35 @@ type openAIAccountRuntimeStats struct {
 type openAIAccountRuntimeStat struct {
 	errorRateEWMABits atomic.Uint64
 	ttftEWMABits      atomic.Uint64
+	ttftSampleCount   atomic.Int64
+	successStreak     atomic.Int64
+	latencyHealth     atomic.Int32
+}
+
+type openAIAccountLatencyHealth int32
+
+const (
+	openAIAccountLatencyHealthy openAIAccountLatencyHealth = iota
+	openAIAccountLatencyDegraded
+	openAIAccountLatencySevere
+)
+
+type openAIAccountLatencyConfig struct {
+	degradeTTFTMs     float64
+	recoverTTFTMs     float64
+	severeTTFTMs      float64
+	minSamples        int64
+	recoverySuccesses int64
+	severeErrorRate   float64
+}
+
+type openAIAccountLatencySnapshot struct {
+	errorRate       float64
+	ttft            float64
+	hasTTFT         bool
+	ttftSampleCount int64
+	successStreak   int64
+	health          openAIAccountLatencyHealth
 }
 
 func newOpenAIAccountRuntimeStats() *openAIAccountRuntimeStats {
@@ -190,10 +219,14 @@ func (s *openAIAccountRuntimeStats) report(accountID int64, success bool, firstT
 	errorSample := 1.0
 	if success {
 		errorSample = 0.0
+		stat.successStreak.Add(1)
+	} else {
+		stat.successStreak.Store(0)
 	}
 	updateEWMAAtomic(&stat.errorRateEWMABits, errorSample, alpha)
 
 	if firstTokenMs != nil && *firstTokenMs > 0 {
+		stat.ttftSampleCount.Add(1)
 		ttft := float64(*firstTokenMs)
 		ttftBits := math.Float64bits(ttft)
 		for {
@@ -231,6 +264,86 @@ func (s *openAIAccountRuntimeStats) snapshot(accountID int64) (errorRate float64
 		return errorRate, 0, false
 	}
 	return errorRate, ttftValue, true
+}
+
+func normalizeOpenAIAccountLatencyConfig(cfg openAIAccountLatencyConfig) openAIAccountLatencyConfig {
+	if cfg.degradeTTFTMs <= 0 {
+		cfg.degradeTTFTMs = 8000
+	}
+	if cfg.recoverTTFTMs <= 0 || cfg.recoverTTFTMs >= cfg.degradeTTFTMs {
+		cfg.recoverTTFTMs = 6000
+	}
+	if cfg.severeTTFTMs <= 0 || cfg.severeTTFTMs < cfg.degradeTTFTMs {
+		cfg.severeTTFTMs = 20000
+	}
+	if cfg.severeTTFTMs < cfg.degradeTTFTMs {
+		cfg.severeTTFTMs = cfg.degradeTTFTMs
+	}
+	if cfg.minSamples <= 0 {
+		cfg.minSamples = 3
+	}
+	if cfg.minSamples > 100 {
+		cfg.minSamples = 100
+	}
+	if cfg.recoverySuccesses <= 0 {
+		cfg.recoverySuccesses = 2
+	}
+	if cfg.severeErrorRate <= 0 || cfg.severeErrorRate > 1 {
+		cfg.severeErrorRate = 0.5
+	}
+	return cfg
+}
+
+func (s *openAIAccountRuntimeStats) latencySnapshot(accountID int64, cfg openAIAccountLatencyConfig) openAIAccountLatencySnapshot {
+	snapshot := openAIAccountLatencySnapshot{health: openAIAccountLatencyHealthy}
+	if s == nil || accountID <= 0 {
+		return snapshot
+	}
+	value, ok := s.accounts.Load(accountID)
+	if !ok {
+		return snapshot
+	}
+	stat, _ := value.(*openAIAccountRuntimeStat)
+	if stat == nil {
+		return snapshot
+	}
+
+	cfg = normalizeOpenAIAccountLatencyConfig(cfg)
+	snapshot.errorRate = clamp01(math.Float64frombits(stat.errorRateEWMABits.Load()))
+	snapshot.ttftSampleCount = stat.ttftSampleCount.Load()
+	snapshot.successStreak = stat.successStreak.Load()
+	ttftValue := math.Float64frombits(stat.ttftEWMABits.Load())
+	if !math.IsNaN(ttftValue) {
+		snapshot.ttft = ttftValue
+		snapshot.hasTTFT = true
+	}
+
+	current := openAIAccountLatencyHealth(stat.latencyHealth.Load())
+	if current < openAIAccountLatencyHealthy || current > openAIAccountLatencySevere {
+		current = openAIAccountLatencyHealthy
+	}
+	next := current
+	enoughTTFTSamples := snapshot.hasTTFT && snapshot.ttftSampleCount >= cfg.minSamples
+	switch {
+	case enoughTTFTSamples && snapshot.ttft >= cfg.severeTTFTMs:
+		next = openAIAccountLatencySevere
+	case snapshot.errorRate > cfg.severeErrorRate:
+		next = openAIAccountLatencySevere
+	case enoughTTFTSamples && snapshot.ttft >= cfg.degradeTTFTMs:
+		next = openAIAccountLatencyDegraded
+	case current != openAIAccountLatencyHealthy:
+		ttftRecovered := !snapshot.hasTTFT || !enoughTTFTSamples || snapshot.ttft <= cfg.recoverTTFTMs
+		if ttftRecovered && snapshot.successStreak >= cfg.recoverySuccesses && snapshot.errorRate <= cfg.severeErrorRate {
+			next = openAIAccountLatencyHealthy
+		}
+	default:
+		next = openAIAccountLatencyHealthy
+	}
+	if next != current {
+		stat.latencyHealth.Store(int32(next))
+	}
+	snapshot.health = next
+	return snapshot
 }
 
 func (s *openAIAccountRuntimeStats) size() int {
@@ -478,12 +591,13 @@ func (s *defaultOpenAIAccountScheduler) shouldEscapeStickyAccount(accountID int6
 }
 
 type openAIAccountCandidateScore struct {
-	account   *Account
-	loadInfo  *AccountLoadInfo
-	score     float64
-	errorRate float64
-	ttft      float64
-	hasTTFT   bool
+	account       *Account
+	loadInfo      *AccountLoadInfo
+	score         float64
+	errorRate     float64
+	ttft          float64
+	hasTTFT       bool
+	latencyHealth openAIAccountLatencyHealth
 }
 
 func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
@@ -492,21 +606,26 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 	loadMap map[int64]*AccountLoadInfo,
 ) openAIAccountLoadPlan {
 	allCandidates := make([]openAIAccountCandidateScore, 0, len(filtered))
+	latencyCfg := s.service.openAIAccountLatencyConfig()
 	for _, account := range filtered {
 		loadInfo := loadMap[account.ID]
 		if loadInfo == nil {
 			loadInfo = &AccountLoadInfo{AccountID: account.ID}
 		}
 		errorRate, ttft, hasTTFT := 0.0, 0.0, false
+		latencyHealth := openAIAccountLatencyHealthy
 		if s.stats != nil {
-			errorRate, ttft, hasTTFT = s.stats.snapshot(account.ID)
+			latency := s.stats.latencySnapshot(account.ID, latencyCfg)
+			errorRate, ttft, hasTTFT = latency.errorRate, latency.ttft, latency.hasTTFT
+			latencyHealth = latency.health
 		}
 		allCandidates = append(allCandidates, openAIAccountCandidateScore{
-			account:   account,
-			loadInfo:  loadInfo,
-			errorRate: errorRate,
-			ttft:      ttft,
-			hasTTFT:   hasTTFT,
+			account:       account,
+			loadInfo:      loadInfo,
+			errorRate:     errorRate,
+			ttft:          ttft,
+			hasTTFT:       hasTTFT,
+			latencyHealth: latencyHealth,
 		})
 	}
 
@@ -599,8 +718,19 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 	}
 
 	now := time.Now()
+	healthyCandidates := 0
+	degradedCandidates := 0
+	severeCandidates := 0
 	for i := range candidates {
 		item := &candidates[i]
+		switch item.latencyHealth {
+		case openAIAccountLatencyHealthy:
+			healthyCandidates++
+		case openAIAccountLatencyDegraded:
+			degradedCandidates++
+		case openAIAccountLatencySevere:
+			severeCandidates++
+		}
 		priorityFactor := 1.0
 		if maxPriority > minPriority {
 			priorityFactor = 1 - float64(item.account.Priority-minPriority)/float64(maxPriority-minPriority)
@@ -636,6 +766,13 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 			weights.Reset*resetFactor +
 			weights.QuotaHeadroom*quotaHeadroomFactor
 	}
+	if healthyCandidates == 0 && (degradedCandidates > 0 || severeCandidates > 0) {
+		slog.Debug("openai_scheduler_all_candidates_latency_degraded",
+			"candidate_count", len(candidates),
+			"degraded_count", degradedCandidates,
+			"severe_count", severeCandidates,
+		)
+	}
 	plan.candidates = candidates
 
 	plan.topK = len(candidates)
@@ -652,7 +789,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 		if len(pool) == 0 {
 			return nil
 		}
-		return sortOpenAIDedicatedSelectionOrder(pool)
+		return sortOpenAILatencyAwareSelectionOrder(pool)
 	}
 
 	if req.RequireCompact {
@@ -676,6 +813,40 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 	}
 
 	return buildSelectionOrder(plan.candidates)
+}
+
+func sortOpenAILatencyAwareSelectionOrder(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
+	if len(pool) == 0 {
+		return nil
+	}
+	ordered := append([]openAIAccountCandidateScore(nil), pool...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		a, b := ordered[i], ordered[j]
+		if a.latencyHealth != b.latencyHealth {
+			return a.latencyHealth < b.latencyHealth
+		}
+		if a.latencyHealth != openAIAccountLatencyHealthy || b.latencyHealth != openAIAccountLatencyHealthy {
+			if math.Abs(a.errorRate-b.errorRate) > 0.01 {
+				return a.errorRate < b.errorRate
+			}
+			if a.hasTTFT && b.hasTTFT && math.Abs(a.ttft-b.ttft) > 250 {
+				return a.ttft < b.ttft
+			}
+			if a.loadInfo != nil && b.loadInfo != nil {
+				if a.loadInfo.LoadRate != b.loadInfo.LoadRate {
+					return a.loadInfo.LoadRate < b.loadInfo.LoadRate
+				}
+				if a.loadInfo.WaitingCount != b.loadInfo.WaitingCount {
+					return a.loadInfo.WaitingCount < b.loadInfo.WaitingCount
+				}
+			}
+			if a.score != b.score {
+				return a.score > b.score
+			}
+		}
+		return dedicatedAccountLess(a.account, b.account)
+	})
+	return ordered
 }
 
 func sortOpenAIDedicatedSelectionOrder(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
@@ -1313,6 +1484,21 @@ func (s *OpenAIGatewayService) openAIStickyEscapeConfig() openAIStickyEscapeConf
 		ttftMs:    15000,
 		errorRate: 0.5,
 	}
+}
+
+func (s *OpenAIGatewayService) openAIAccountLatencyConfig() openAIAccountLatencyConfig {
+	if s != nil && s.cfg != nil {
+		cfg := s.cfg.Gateway.OpenAIScheduler
+		return normalizeOpenAIAccountLatencyConfig(openAIAccountLatencyConfig{
+			degradeTTFTMs:     float64(cfg.LatencyDegradeTTFTMs),
+			recoverTTFTMs:     float64(cfg.LatencyRecoverTTFTMs),
+			severeTTFTMs:      float64(cfg.LatencySevereTTFTMs),
+			minSamples:        int64(cfg.LatencyMinSamples),
+			recoverySuccesses: int64(cfg.LatencyRecoverySuccesses),
+			severeErrorRate:   cfg.LatencySevereErrorRate,
+		})
+	}
+	return normalizeOpenAIAccountLatencyConfig(openAIAccountLatencyConfig{})
 }
 
 func (s *OpenAIGatewayService) openAIWSSchedulerWeights() GatewayOpenAIWSSchedulerScoreWeightsView {

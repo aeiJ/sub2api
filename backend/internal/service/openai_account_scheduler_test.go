@@ -1425,6 +1425,46 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyEscapeByTT
 	}
 }
 
+func TestOpenAIGatewayService_SelectAccountWithScheduler_SoftDegradedStickyKeepsPromptCacheAffinity(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(10114)
+	accounts := []Account{
+		{ID: 21801, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}},
+		{ID: 21802, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}},
+	}
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:session_hash_soft_degraded": 21801}}
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIScheduler.StickyEscapeEnabled = true
+	cfg.Gateway.OpenAIScheduler.StickyEscapeTTFTMs = 15000
+	cfg.Gateway.OpenAIScheduler.StickyEscapeErrorRate = 0.5
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              cache,
+		cfg:                cfg,
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		openaiAccountStats: newOpenAIAccountRuntimeStats(),
+	}
+
+	slowButNotSevere := 9000
+	for i := 0; i < 3; i++ {
+		svc.openaiAccountStats.report(21801, true, &slowButNotSevere)
+	}
+
+	selection, decision, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "session_hash_soft_degraded", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(21801), selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerSessionSticky, decision.Layer)
+	require.True(t, decision.StickySessionHit)
+	require.Equal(t, int64(21801), cache.sessionBindings["openai:session_hash_soft_degraded"])
+	require.Zero(t, cache.deletedSessions["openai:session_hash_soft_degraded"])
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
 func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyEscapeByErrorRate(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(10102)
@@ -2000,6 +2040,100 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_LoadBalanceBusySwitches
 	}
 }
 
+func TestOpenAIGatewayService_SelectAccountWithScheduler_NewSessionSkipsDegradedHighPriorityAccount(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(112)
+	accounts := []Account{
+		{ID: 38001, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}},
+		{ID: 38002, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		openaiAccountStats: newOpenAIAccountRuntimeStats(),
+	}
+	degradedTTFT := 9000
+	healthyTTFT := 1000
+	for i := 0; i < 3; i++ {
+		svc.openaiAccountStats.report(38001, true, &degradedTTFT)
+		svc.openaiAccountStats.report(38002, true, &healthyTTFT)
+	}
+
+	selection, decision, err := svc.SelectAccountWithScheduler(
+		ctx,
+		&groupID,
+		"",
+		"",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(38002), selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_AllDegradedChoosesLeastBadAccount(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(113)
+	accounts := []Account{
+		{ID: 38101, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}},
+		{ID: 38102, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}},
+		{ID: 38103, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 9, GroupIDs: []int64{groupID}},
+	}
+	concurrencyCache := schedulerTestConcurrencyCache{
+		loadMap: map[int64]*AccountLoadInfo{
+			38101: {AccountID: 38101, LoadRate: 5, WaitingCount: 0},
+			38102: {AccountID: 38102, LoadRate: 5, WaitingCount: 0},
+			38103: {AccountID: 38103, LoadRate: 5, WaitingCount: 0},
+		},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+		openaiAccountStats: newOpenAIAccountRuntimeStats(),
+	}
+	highPrioritySlow := 12000
+	leastBad := 9000
+	severe := 16000
+	for i := 0; i < 3; i++ {
+		svc.openaiAccountStats.report(38101, true, &highPrioritySlow)
+		svc.openaiAccountStats.report(38102, true, &leastBad)
+		svc.openaiAccountStats.report(38103, true, &severe)
+	}
+
+	selection, decision, err := svc.SelectAccountWithScheduler(
+		ctx,
+		&groupID,
+		"",
+		"",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(38102), selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
 func TestOpenAIGatewayService_SelectAccountWithScheduler_LoadBalanceAllBusyWaitsFirstAccount(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(13)
@@ -2239,6 +2373,69 @@ func TestOpenAIAccountRuntimeStats_ReportAndSnapshot(t *testing.T) {
 	require.Equal(t, 1, stats.size())
 }
 
+func TestOpenAIAccountRuntimeStats_LatencyHealthHysteresis(t *testing.T) {
+	stats := newOpenAIAccountRuntimeStats()
+	cfg := normalizeOpenAIAccountLatencyConfig(openAIAccountLatencyConfig{
+		degradeTTFTMs:     8000,
+		recoverTTFTMs:     6000,
+		severeTTFTMs:      20000,
+		minSamples:        3,
+		recoverySuccesses: 2,
+		severeErrorRate:   0.5,
+	})
+	accountID := int64(1002)
+
+	slow := 9000
+	stats.report(accountID, true, &slow)
+	stats.report(accountID, true, &slow)
+	snapshot := stats.latencySnapshot(accountID, cfg)
+	require.Equal(t, openAIAccountLatencyHealthy, snapshot.health)
+	require.Equal(t, int64(2), snapshot.ttftSampleCount)
+
+	stats.report(accountID, true, &slow)
+	snapshot = stats.latencySnapshot(accountID, cfg)
+	require.Equal(t, openAIAccountLatencyDegraded, snapshot.health)
+
+	mid := 7000
+	stats.report(accountID, true, &mid)
+	snapshot = stats.latencySnapshot(accountID, cfg)
+	require.Equal(t, openAIAccountLatencyDegraded, snapshot.health)
+
+	fast := 1000
+	stats.report(accountID, true, &fast)
+	stats.report(accountID, true, &fast)
+	snapshot = stats.latencySnapshot(accountID, cfg)
+	require.Equal(t, openAIAccountLatencyHealthy, snapshot.health)
+	require.GreaterOrEqual(t, snapshot.successStreak, int64(2))
+}
+
+func TestOpenAIAccountRuntimeStats_LatencyHealthSevere(t *testing.T) {
+	stats := newOpenAIAccountRuntimeStats()
+	cfg := normalizeOpenAIAccountLatencyConfig(openAIAccountLatencyConfig{
+		degradeTTFTMs:     8000,
+		recoverTTFTMs:     6000,
+		severeTTFTMs:      20000,
+		minSamples:        3,
+		recoverySuccesses: 2,
+		severeErrorRate:   0.5,
+	})
+	accountID := int64(1003)
+
+	verySlow := 21000
+	for i := 0; i < 3; i++ {
+		stats.report(accountID, true, &verySlow)
+	}
+	snapshot := stats.latencySnapshot(accountID, cfg)
+	require.Equal(t, openAIAccountLatencySevere, snapshot.health)
+
+	for i := 0; i < 8; i++ {
+		stats.report(accountID, false, nil)
+	}
+	snapshot = stats.latencySnapshot(accountID, cfg)
+	require.Equal(t, openAIAccountLatencySevere, snapshot.health)
+	require.Greater(t, snapshot.errorRate, 0.5)
+}
+
 func TestOpenAIAccountRuntimeStats_ReportConcurrent(t *testing.T) {
 	stats := newOpenAIAccountRuntimeStats()
 
@@ -2361,6 +2558,32 @@ func TestClamp01_AllBranches(t *testing.T) {
 	require.Equal(t, 0.5, clamp01(0.5))
 }
 
+func TestSortOpenAILatencyAwareSelectionOrder_UsesScoreForDegradedTie(t *testing.T) {
+	ordered := sortOpenAILatencyAwareSelectionOrder([]openAIAccountCandidateScore{
+		{
+			account:       &Account{ID: 5101, Priority: 0},
+			loadInfo:      &AccountLoadInfo{AccountID: 5101, LoadRate: 10, WaitingCount: 0},
+			score:         1,
+			errorRate:     0.1,
+			ttft:          9000,
+			hasTTFT:       true,
+			latencyHealth: openAIAccountLatencyDegraded,
+		},
+		{
+			account:       &Account{ID: 5102, Priority: 0},
+			loadInfo:      &AccountLoadInfo{AccountID: 5102, LoadRate: 10, WaitingCount: 0},
+			score:         2,
+			errorRate:     0.1,
+			ttft:          9000,
+			hasTTFT:       true,
+			latencyHealth: openAIAccountLatencyDegraded,
+		},
+	})
+
+	require.Len(t, ordered, 2)
+	require.Equal(t, int64(5102), ordered[0].account.ID)
+}
+
 func TestCalcLoadSkewByMoments_Branches(t *testing.T) {
 	require.Equal(t, 0.0, calcLoadSkewByMoments(1, 1, 1))
 	// variance < 0 分支：sumSquares/count - mean^2 为负值时应钳制为 0。
@@ -2417,6 +2640,13 @@ func TestOpenAIGatewayService_SchedulerWrappersAndDefaults(t *testing.T) {
 	require.Equal(t, 0.7, defaultWeights.Queue)
 	require.Equal(t, 0.8, defaultWeights.ErrorRate)
 	require.Equal(t, 0.5, defaultWeights.TTFT)
+	defaultLatency := svc.openAIAccountLatencyConfig()
+	require.Equal(t, 8000.0, defaultLatency.degradeTTFTMs)
+	require.Equal(t, 6000.0, defaultLatency.recoverTTFTMs)
+	require.Equal(t, 20000.0, defaultLatency.severeTTFTMs)
+	require.Equal(t, int64(3), defaultLatency.minSamples)
+	require.Equal(t, int64(2), defaultLatency.recoverySuccesses)
+	require.Equal(t, 0.5, defaultLatency.severeErrorRate)
 
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.StickySessionTTLSeconds = 180
@@ -2425,6 +2655,12 @@ func TestOpenAIGatewayService_SchedulerWrappersAndDefaults(t *testing.T) {
 	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Queue = 0.4
 	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.ErrorRate = 0.5
 	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT = 0.6
+	cfg.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs = 7000
+	cfg.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs = 5000
+	cfg.Gateway.OpenAIScheduler.LatencySevereTTFTMs = 12000
+	cfg.Gateway.OpenAIScheduler.LatencyMinSamples = 4
+	cfg.Gateway.OpenAIScheduler.LatencyRecoverySuccesses = 3
+	cfg.Gateway.OpenAIScheduler.LatencySevereErrorRate = 0.6
 	svcWithCfg := &OpenAIGatewayService{cfg: cfg}
 
 	require.Equal(t, 180*time.Second, svcWithCfg.openAIWSSessionStickyTTL())
@@ -2434,6 +2670,13 @@ func TestOpenAIGatewayService_SchedulerWrappersAndDefaults(t *testing.T) {
 	require.Equal(t, 0.4, customWeights.Queue)
 	require.Equal(t, 0.5, customWeights.ErrorRate)
 	require.Equal(t, 0.6, customWeights.TTFT)
+	customLatency := svcWithCfg.openAIAccountLatencyConfig()
+	require.Equal(t, 7000.0, customLatency.degradeTTFTMs)
+	require.Equal(t, 5000.0, customLatency.recoverTTFTMs)
+	require.Equal(t, 12000.0, customLatency.severeTTFTMs)
+	require.Equal(t, int64(4), customLatency.minSamples)
+	require.Equal(t, int64(3), customLatency.recoverySuccesses)
+	require.Equal(t, 0.6, customLatency.severeErrorRate)
 }
 
 func TestDefaultOpenAIAccountScheduler_IsAccountTransportCompatible_Branches(t *testing.T) {
