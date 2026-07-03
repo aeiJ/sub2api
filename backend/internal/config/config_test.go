@@ -1838,6 +1838,11 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.LatencySevereErrorRate = 1.5 },
 			wantErr: "gateway.openai_scheduler.latency_severe_error_rate",
 		},
+		{
+			name:    "latency_severe_error_rate 不能为 0",
+			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.LatencySevereErrorRate = 0 },
+			wantErr: "gateway.openai_scheduler.latency_severe_error_rate",
+		},
 	}
 
 	for _, tc := range cases {

@@ -2746,8 +2746,8 @@ func (c *Config) Validate() error {
 	if c.Gateway.OpenAIScheduler.LatencyRecoverySuccesses <= 0 {
 		return fmt.Errorf("gateway.openai_scheduler.latency_recovery_successes must be positive")
 	}
-	if c.Gateway.OpenAIScheduler.LatencySevereErrorRate < 0 || c.Gateway.OpenAIScheduler.LatencySevereErrorRate > 1 {
-		return fmt.Errorf("gateway.openai_scheduler.latency_severe_error_rate must be between 0 and 1")
+	if c.Gateway.OpenAIScheduler.LatencySevereErrorRate <= 0 || c.Gateway.OpenAIScheduler.LatencySevereErrorRate > 1 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_severe_error_rate must be greater than 0 and less than or equal to 1")
 	}
 	if c.Gateway.MaxLineSize < 0 {
 		return fmt.Errorf("gateway.max_line_size must be non-negative")

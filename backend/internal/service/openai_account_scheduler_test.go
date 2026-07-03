@@ -1407,7 +1407,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyEscapeByTT
 		selection.ReleaseFunc()
 	}
 
-	slowTTFT := 20000
+	slowTTFT := 50000
 	for i := 0; i < 3; i++ {
 		svc.openaiAccountStats.report(21101, true, &slowTTFT)
 	}
@@ -1460,6 +1460,46 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SoftDegradedStickyKeeps
 	require.True(t, decision.StickySessionHit)
 	require.Equal(t, int64(21801), cache.sessionBindings["openai:session_hash_soft_degraded"])
 	require.Zero(t, cache.deletedSessions["openai:session_hash_soft_degraded"])
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_SubSevereStickyKeepsPromptCacheAffinity(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(10115)
+	accounts := []Account{
+		{ID: 21901, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}},
+		{ID: 21902, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}},
+	}
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:session_hash_sub_severe": 21901}}
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIScheduler.StickyEscapeEnabled = true
+	cfg.Gateway.OpenAIScheduler.StickyEscapeTTFTMs = 15000
+	cfg.Gateway.OpenAIScheduler.StickyEscapeErrorRate = 0.5
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              cache,
+		cfg:                cfg,
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		openaiAccountStats: newOpenAIAccountRuntimeStats(),
+	}
+
+	subSevereTTFT := 16000
+	for i := 0; i < 3; i++ {
+		svc.openaiAccountStats.report(21901, true, &subSevereTTFT)
+	}
+
+	selection, decision, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "session_hash_sub_severe", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(21901), selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerSessionSticky, decision.Layer)
+	require.True(t, decision.StickySessionHit)
+	require.Equal(t, int64(21901), cache.sessionBindings["openai:session_hash_sub_severe"])
+	require.Zero(t, cache.deletedSessions["openai:session_hash_sub_severe"])
 	if selection.ReleaseFunc != nil {
 		selection.ReleaseFunc()
 	}
@@ -1714,19 +1754,19 @@ func TestDefaultOpenAIAccountScheduler_ShouldEscapeStickyAccount_ThresholdBounda
 		stats.report(accountID, false, nil)
 	}
 	reason, errorRate, _, shouldEscape = scheduler.shouldEscapeStickyAccount(accountID, openAIStickyEscapeConfig{
-		enabled:   true,
+		enabled:   false,
 		ttftMs:    15000,
-		errorRate: 1,
+		errorRate: 0.5,
 	})
 	require.False(t, shouldEscape)
 	require.Empty(t, reason)
 	reason, errorRate, observedTTFT, shouldEscape = scheduler.shouldEscapeStickyAccount(accountID, openAIStickyEscapeConfig{
 		enabled:   true,
 		ttftMs:    15000,
-		errorRate: errorRate,
+		errorRate: 0.5,
 	})
-	require.False(t, shouldEscape)
-	require.Empty(t, reason)
+	require.True(t, shouldEscape)
+	require.Equal(t, "error_rate", reason)
 	require.InDelta(t, 0.655936, errorRate, 1e-9)
 	require.InDelta(t, 15000, observedTTFT, 1e-9)
 }
@@ -2107,7 +2147,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_AllDegradedChoosesLeast
 	}
 	highPrioritySlow := 12000
 	leastBad := 9000
-	severe := 16000
+	severe := 21000
 	for i := 0; i < 3; i++ {
 		svc.openaiAccountStats.report(38101, true, &highPrioritySlow)
 		svc.openaiAccountStats.report(38102, true, &leastBad)

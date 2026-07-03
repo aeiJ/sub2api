@@ -580,14 +580,21 @@ func (s *defaultOpenAIAccountScheduler) shouldEscapeStickyAccount(accountID int6
 	if !cfg.enabled || s == nil || s.stats == nil || accountID <= 0 {
 		return "", 0, 0, false
 	}
-	errorRate, ttft, hasTTFT := s.stats.snapshot(accountID)
-	if hasTTFT && ttft > cfg.ttftMs {
-		return "ttft", errorRate, ttft, true
+	latencyCfg := normalizeOpenAIAccountLatencyConfig(openAIAccountLatencyConfig{})
+	if s.service != nil {
+		latencyCfg = s.service.openAIAccountLatencyConfig()
 	}
-	if errorRate > cfg.errorRate {
-		return "error_rate", errorRate, ttft, true
+	latency := s.stats.latencySnapshot(accountID, latencyCfg)
+	if latency.health != openAIAccountLatencySevere {
+		return "", latency.errorRate, latency.ttft, false
 	}
-	return "", errorRate, ttft, false
+	if latency.hasTTFT && latency.ttft >= latencyCfg.severeTTFTMs {
+		return "ttft", latency.errorRate, latency.ttft, true
+	}
+	if latency.errorRate > latencyCfg.severeErrorRate {
+		return "error_rate", latency.errorRate, latency.ttft, true
+	}
+	return "latency_health", latency.errorRate, latency.ttft, true
 }
 
 type openAIAccountCandidateScore struct {
