@@ -434,6 +434,7 @@ export default {
     channelManagement: 'Channels',
     channelPricing: 'Channel Pricing',
     channelMonitor: 'Channel Monitor',
+    upstreamChannels: 'Upstream Channels',
     channelStatus: 'Channel Status',
     riskControl: 'Risk Control',
   },
@@ -2587,6 +2588,182 @@ export default {
          syncModelsError: 'Failed to sync models'
        }
      },
+
+    upstreamChannels: {
+      title: 'Upstream Channels',
+      description: 'Manage upstream channel platforms, groups and API keys',
+      searchPlaceholder: 'Search upstream channels...',
+      createButton: 'Create Upstream Channel',
+      createTitle: 'Create Upstream Channel',
+      editTitle: 'Edit Upstream Channel',
+      emptyTitle: 'No Upstream Channels',
+      emptyDescription: 'Create an upstream channel to manage Claude and GPT provider keys',
+      loadError: 'Failed to load upstream channels',
+      loadOneError: 'Failed to load upstream channel',
+      groupsLoadError: 'Failed to load group options',
+      createSuccess: 'Upstream channel created',
+      updateSuccess: 'Upstream channel updated',
+      deleteSuccess: 'Upstream channel deleted',
+      createError: 'Failed to create upstream channel',
+      updateError: 'Failed to update upstream channel',
+      deleteError: 'Failed to delete upstream channel',
+      deleteTitle: 'Delete Upstream Channel',
+      deleteConfirm: 'Are you sure you want to delete upstream channel "{name}"? This action cannot be undone.',
+	      syncResultTitle: 'Sync Result: {name}',
+	      syncSuccess: 'Sync completed',
+	      syncFailed: 'Sync failed',
+	      columns: {
+	        name: 'Name',
+	        platforms: 'Platforms',
+	        keys: 'Keys',
+	        updatedAt: 'Updated',
+        actions: 'Actions'
+	      },
+	      filters: {
+	        allProviders: 'All Providers'
+	      },
+	      status: {
+	        active: 'Active',
+	        disabled: 'Disabled'
+	      },
+      providers: {
+        anthropic: 'Claude',
+        openai: 'GPT',
+        unknown: 'Unknown'
+      },
+      actions: {
+        preview: 'Preview',
+        sync: 'Sync',
+        test: 'Test'
+      },
+      form: {
+        name: 'Name',
+        namePlaceholder: 'Enter upstream channel name',
+        status: 'Status',
+        description: 'Description',
+        descriptionPlaceholder: 'Optional description',
+        platforms: 'Platforms',
+        platformsHint: 'A channel can include both Claude and GPT platforms, each syncing to matching accounts and groups.',
+        noPlatforms: 'No platforms configured',
+        poolCount: '{count} group configs',
+        removePlatform: 'Remove platform',
+        provider: 'Provider',
+        displayName: 'Display Name',
+        baseUrl: 'Base URL',
+        groups: 'Group Config',
+        groupsHint: 'Each group config syncs to a group and becomes the default group for the keys below.',
+        addPool: 'Add Group',
+        noPools: 'No group configs',
+        removePool: 'Remove group',
+        unnamedPool: 'Unnamed group',
+        poolName: 'Pool Name',
+        groupName: 'Group Name',
+        groupNamePlaceholder: 'Select an existing group or create a new one',
+        newGroupNamePlaceholder: 'Enter a new group name',
+        createGroupOption: 'Create group',
+        createGroupLabel: 'Create group: {name}',
+        createGroupDescription: 'Created during sync after save',
+        syncedGroup: 'Synced Group',
+        groupMultiplier: 'Group Multiplier',
+        accountMultiplier: 'Account Multiplier',
+        loadFactor: 'Load Factor',
+        concurrency: 'Concurrency',
+        keys: 'Account Key',
+        keysHint: 'Each upstream group key maps to one account; blank existing keys are left unchanged.',
+        accountKey: 'Mapped Account / API Key',
+        accountKeyHint: 'One upstream group key syncs to one account and binds to the selected group above.',
+        accountName: 'Account Name',
+        addKey: 'Add Key',
+        batchPlaceholder: 'Paste API keys, one per line. Optional format: name,key',
+        addBatchKeys: 'Add Batch',
+        noKeys: 'No API keys',
+        keyName: 'Key Name',
+        apiKey: 'API Key',
+        apiKeyPlaceholder: 'Leave blank to keep the current key',
+        syncedAccount: 'Synced Account',
+        lastTest: 'Last Test',
+        defaultPoolSuffix: 'Pool',
+        defaultGroupSuffix: 'Group'
+      },
+	      preview: {
+	        title: 'Sync Preview: {name}',
+	        failed: 'Failed to load sync preview',
+	        explain: 'This shows what will be written to Groups and Accounts. Preview and sync only manage configuration data, not routing, billing, or subscription logic.',
+	        groups: 'Groups',
+	        accounts: 'Accounts',
+	        noChanges: 'No changes reported',
+	        itemCount: '{count} item(s)',
+	        syncedId: 'Linked ID #{id}',
+	        warnings: 'Needs attention',
+	        actions: {
+	          createGroup: 'Create group',
+	          updateGroup: 'Update group',
+	          createAccount: 'Create account',
+	          updateAccount: 'Update account',
+	          skipAccount: 'Skip account',
+	          error: 'Failed'
+	        },
+	        descriptions: {
+	          createGroup: 'Adds a group during sync',
+	          updateGroup: 'Updates an existing group during sync',
+	          createAccount: 'Adds an account during sync',
+	          updateAccount: 'Updates an existing account during sync',
+	          skipAccount: 'Missing usable key, account will not be written',
+	          error: 'Fix this before syncing',
+	          other: 'Other sync action'
+	        },
+	        targets: {
+	          group: 'Group Management',
+	          account: 'Account Management'
+	        },
+	        warningMessages: {
+	          missingApiKey: 'API key is missing, so the account will not be created or updated.',
+	          missingOrInvalidApiKey: 'API key is missing or cannot be decrypted, so this account will be skipped.',
+	          groupMissing: 'The previously linked group no longer exists. It will be treated as a new group.',
+	          accountLookupFailed: 'Failed to locate the synced account by upstream key ID. Confirm Account Management after sync.'
+	        }
+	      },
+	      test: {
+	        title: 'Speed Test Result',
+	        explain: 'The speed test checks each upstream group key mapped to an account and shows latency plus the upstream response.',
+	        noResults: 'No test results',
+	        channel: 'Channel',
+	        keyId: 'Key #{id}',
+	        groupName: 'Group: {name}',
+	        accountId: 'Account ID #{id}',
+	        latency: 'Latency',
+	        response: 'Response',
+	        testedAt: 'Tested at',
+	        success: 'Speed test completed',
+	        failed: 'Speed test failed',
+	        status: {
+	          operational: 'Usable',
+	          authError: 'Auth failed',
+	          failed: 'Unavailable',
+	          unknown: 'Unknown'
+	        },
+	        summary: {
+	          operational: 'Usable keys',
+	          authError: 'Auth failures',
+	          failed: 'Unavailable',
+	          unknown: 'Unknown'
+	        },
+	        messages: {
+	          missingOrInvalidApiKey: 'API key is missing or cannot be decrypted'
+	        }
+	      },
+      validation: {
+        nameRequired: 'Please enter a channel name',
+        platformRequired: 'Add at least one platform',
+        platformDuplicate: '{platform} has already been added to this channel',
+        platformInvalid: '{platform} requires display name and Base URL',
+        poolInvalid: '{platform} has an incomplete group config',
+        poolDuplicate: 'Group config "{pool}" is duplicated in the same platform',
+        poolNumbersInvalid: 'Invalid numeric config in "{pool}"',
+        keyNameRequired: 'Please enter a key name in "{pool}"',
+        newKeyRequired: 'New keys in "{pool}" require an API key'
+      }
+    },
 
     riskControl: {
       title: 'Risk Control',
