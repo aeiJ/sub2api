@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
@@ -1063,23 +1062,6 @@ func defaultBaseURL(provider string) string {
 	default:
 		return ""
 	}
-}
-
-func upstreamModelsEndpoint(baseURL, provider string) string {
-	base := normalizeUpstreamBaseURL(baseURL, provider)
-	if base == "" {
-		base = defaultBaseURL(provider)
-	}
-	u, err := url.Parse(base)
-	if err != nil {
-		return base
-	}
-	path := strings.TrimRight(u.Path, "/")
-	if !strings.HasSuffix(path, "/models") {
-		path += "/models"
-	}
-	u.Path = path
-	return u.String()
 }
 
 func fingerprintSecret(secret string) string {
