@@ -8,6 +8,7 @@ export default {
     switchToDark: '切换到深色模式',
     dashboard: '控制台',
     login: '登录',
+    modelMarketplace: '模型广场',
     getStarted: '立即开始',
     goToDashboard: '进入控制台',
     // 新增：面向用户的价值主张
@@ -107,6 +108,68 @@ export default {
     },
     footer: {
       allRightsReserved: '保留所有权利。'
+    }
+  },
+
+  modelMarketplace: {
+    title: '模型广场',
+    publicCatalog: '公开模型目录',
+    subtitle: '查看当前可调度账号支持的模型、公开分组与按最低公开倍率计算后的参考价格。',
+    searchPlaceholder: '搜索模型、供应商或分组',
+    resultCount: '共 {count} 个模型',
+    gridView: '卡片',
+    copyModel: '复制模型名',
+    copyFailed: '复制失败，请手动复制模型名',
+    defaultDescription: '当前公开分组可用的 AI 模型。',
+    emptyTitle: '没有可展示的模型',
+    emptyDescription: '请调整搜索或筛选条件，或稍后再查看。',
+    errorTitle: '模型广场加载失败',
+    errorMessage: '暂时无法获取模型广场数据',
+    retry: '重试',
+    rate: '最低倍率 {rate}',
+    summary: {
+      models: '模型',
+      providers: '供应商',
+      minRate: '最低倍率'
+    },
+    filters: {
+      title: '筛选',
+      active: '{count} 项已选',
+      close: '关闭筛选',
+      reset: '重置',
+      none: '暂无选项',
+      providers: '供应商',
+      groups: '公开分组',
+      billingModes: '计费类型',
+      tags: '标签',
+      platforms: '端点类型'
+    },
+    pricing: {
+      input: '输入 Input',
+      output: '输出 Output',
+      cacheWrite: '缓存写入 Cache write',
+      cacheRead: '缓存读取 Cached input',
+      imageOutput: '图片输出 Image output',
+      perRequest: '按次请求',
+      formula: '按官网基础价 × 公开分组最低倍率 {rate} 计算',
+      units: {
+        perMillionTokens: '折后价 / 1M tokens',
+        perMillionImageTokens: '折后价 / 1M image tokens',
+        perRequest: '折后价 / request'
+      }
+    },
+    billingModes: {
+      token: 'Token',
+      image: '图片',
+      per_request: '按次'
+    },
+    tags: {
+      reasoning: '推理',
+      tools: '工具',
+      vision: '视觉',
+      files: '文件',
+      image: '图像',
+      context: '长上下文'
     }
   },
 
@@ -434,6 +497,7 @@ export default {
     channelManagement: '渠道管理',
     channelPricing: '渠道定价',
     channelMonitor: '渠道监控',
+    upstreamChannels: '上游管理',
     channelStatus: '渠道状态',
     riskControl: '风控中心',
   },
@@ -2662,6 +2726,204 @@ export default {
         syncModelsSuccess: '已同步 {count} 个新模型',
         syncModelsAlreadyUpToDate: '模型列表已是最新',
         syncModelsError: '同步模型失败'
+      }
+    },
+
+    upstreamChannels: {
+      title: '上游管理',
+      description: '管理上游平台、分组配置和 API Key',
+      searchPlaceholder: '搜索上游渠道...',
+      createButton: '创建上游渠道',
+      createTitle: '创建上游渠道',
+      editTitle: '编辑上游渠道',
+      emptyTitle: '暂无上游渠道',
+      emptyDescription: '创建上游渠道来管理账号平台的 API Key',
+      loadError: '加载上游渠道失败',
+      loadOneError: '加载上游渠道详情失败',
+      groupsLoadError: '加载分组选项失败',
+      createSuccess: '上游渠道创建成功',
+      updateSuccess: '上游渠道更新成功',
+      deleteSuccess: '上游渠道删除成功',
+      createError: '创建上游渠道失败',
+      updateError: '更新上游渠道失败',
+      deleteError: '删除上游渠道失败',
+      deleteTitle: '删除上游渠道',
+      deleteConfirm: '确定要删除上游渠道「{name}」吗？此操作不可撤销。',
+	      syncResultTitle: '同步结果：{name}',
+	      syncSuccess: '同步完成',
+	      syncFailed: '同步失败',
+	      columns: {
+	        name: '名称',
+	        platforms: '平台',
+	        keys: 'Key 数',
+	        details: '上游明细',
+	        updatedAt: '更新时间',
+        actions: '操作'
+	      },
+	      list: {
+	        platform: '平台',
+	        group: '上游 / 本地分组',
+	        multipliers: '倍率',
+	        account: '账号 / Key',
+	        supportedModels: '支持模型',
+	        capacity: '负载',
+	        lastTest: '最近测速',
+	        speedTest: '测速',
+	        localGroupRate: '本地分组',
+	        upstreamGroupRate: '上游分组',
+	        accountRate: '账号',
+	        keyPresent: '有 Key',
+	        keyMissing: '无 Key'
+	      },
+	      filters: {
+	        allProviders: '全部供应商'
+	      },
+	      status: {
+	        active: '启用',
+	        disabled: '禁用'
+	      },
+      providers: {
+        anthropic: 'Anthropic',
+        openai: 'OpenAI',
+        gemini: 'Gemini',
+        antigravity: 'Antigravity',
+        grok: 'Grok',
+        unknown: '未知'
+      },
+      actions: {
+        preview: '预览',
+        sync: '同步',
+        test: '测速'
+      },
+      form: {
+        name: '名称',
+        namePlaceholder: '输入上游渠道名称',
+        status: '状态',
+        description: '描述',
+        descriptionPlaceholder: '可选描述',
+        platforms: '平台',
+        platformsHint: '一个渠道可以同时配置多个账号平台，各平台会同步到对应账号与分组。',
+        noPlatforms: '未配置平台',
+        poolCount: '{count} 个分组配置',
+        removePlatform: '移除平台',
+        provider: '供应商',
+        displayName: '显示名称',
+        baseUrl: 'Base URL',
+        groups: '分组配置',
+        groupsHint: '每个分组配置会同步为分组，并作为下方 Key 同步账号的默认分组。',
+        addPool: '添加分组',
+        noPools: '暂无分组配置',
+        removePool: '移除分组',
+        unnamedPool: '未命名分组',
+	        poolName: '上游分组名称',
+	        groupName: '本地分组名称',
+	        groupNamePlaceholder: '选择已有本地分组或新建分组',
+	        newGroupNamePlaceholder: '输入新本地分组名称',
+        createGroupOption: '新建分组',
+        createGroupLabel: '新建分组：{name}',
+        createGroupDescription: '保存后同步时创建该分组',
+	        syncedGroup: '已同步本地分组',
+        groupMultiplier: '本地分组倍率',
+        upstreamGroupMultiplier: '上游分组倍率',
+        accountMultiplier: '账号倍率',
+        loadFactor: '负载系数',
+        concurrency: '并发数',
+        keys: '账号 Key',
+        keysHint: '每个分组 Key 对应一个账号；留空已有 Key 不会被覆盖。',
+        accountKey: '对应账号 / API Key',
+        accountKeyHint: '一个上游分组 Key 会同步为一个账号，并绑定到上方选择的分组。',
+        accountName: '账号名称',
+        addKey: '添加 Key',
+        batchPlaceholder: '粘贴 API Key，每行一个。可选格式：名称,key',
+        addBatchKeys: '批量添加',
+        noKeys: '暂无 API Key',
+        keyName: 'Key 名称',
+        apiKey: 'API Key',
+        apiKeyPlaceholder: '留空表示保持当前 Key',
+        syncedAccount: '已同步账号',
+        lastTest: '最近测速',
+        defaultPoolSuffix: '池',
+        defaultGroupSuffix: '分组'
+      },
+	      preview: {
+	        title: '同步预览：{name}',
+	        failed: '加载同步预览失败',
+	        explain: '这里展示同步到分组管理和账号管理时会发生的变更；只是预览或同步管理数据，不影响请求路由、计费和订阅逻辑。',
+	        groups: '分组',
+	        accounts: '账号',
+	        noChanges: '没有变更',
+	        itemCount: '{count} 项',
+	        syncedId: '已关联 ID #{id}',
+	        warnings: '需要注意',
+	        actions: {
+	          createGroup: '将新建分组',
+	          updateGroup: '将更新分组',
+	          createAccount: '将新建账号',
+	          updateAccount: '将更新账号',
+	          skipAccount: '将跳过账号',
+	          error: '处理失败'
+	        },
+	        descriptions: {
+	          createGroup: '同步时在分组管理新增',
+	          updateGroup: '同步时更新已有分组配置',
+	          createAccount: '同步时在账号管理新增',
+	          updateAccount: '同步时更新已有账号',
+	          skipAccount: '缺少可用 Key，暂不写入账号',
+	          error: '需要处理后再同步',
+	          other: '其他同步动作'
+	        },
+	        targets: {
+	          group: '分组管理',
+	          account: '账号管理'
+	        },
+	        warningMessages: {
+	          missingApiKey: '未填写 API Key，同步时不会创建或更新账号。',
+	          missingOrInvalidApiKey: 'API Key 缺失或无法解密，同步时会跳过该账号。',
+	          groupMissing: '之前关联的分组不存在，将按新分组处理。',
+	          accountLookupFailed: '按上游 Key 查找已同步账号失败，请同步后确认账号管理。'
+	        }
+	      },
+	      test: {
+	        title: '测速结果',
+	        explain: '测速会逐个检查上游分组 Key 对应账号的连通性，并显示延迟与上游返回信息。',
+	        noResults: '暂无测速结果',
+	        channel: '渠道',
+	        keyId: 'Key #{id}',
+	        groupName: '分组：{name}',
+	        accountId: '账号 ID #{id}',
+	        latency: '延迟',
+	        model: '测试模型',
+	        supportedModels: '支持模型',
+	        response: '返回',
+	        testedAt: '测速时间',
+	        success: '测速完成',
+	        failed: '测速失败',
+	        status: {
+	          operational: '可用',
+	          authError: '认证失败',
+	          failed: '不可用',
+	          unknown: '未确认'
+	        },
+	        summary: {
+	          operational: '可用 Key',
+	          authError: '认证失败',
+	          failed: '不可用',
+	          unknown: '未确认'
+	        },
+	        messages: {
+	          missingOrInvalidApiKey: 'API Key 缺失或无法解密'
+	        }
+	      },
+      validation: {
+        nameRequired: '请输入渠道名称',
+        platformRequired: '至少添加一个平台',
+        platformDuplicate: '该渠道中已存在「{platform}」平台',
+        platformInvalid: '{platform} 需要显示名称和 Base URL',
+        poolInvalid: '{platform} 存在未完成的分组配置',
+        poolDuplicate: '同一平台下的分组配置「{pool}」重复',
+        poolNumbersInvalid: '「{pool}」中的数值配置无效',
+        keyNameRequired: '请填写「{pool}」中的 Key 名称',
+        newKeyRequired: '「{pool}」中的新 Key 需要填写 API Key'
       }
     },
 

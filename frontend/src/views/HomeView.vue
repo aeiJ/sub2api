@@ -47,7 +47,7 @@
         </div>
 
         <!-- Nav Actions -->
-        <div class="flex items-center gap-3">
+        <div class="flex min-w-0 items-center gap-2 sm:gap-3">
           <!-- Language Switcher -->
           <LocaleSwitcher />
 
@@ -72,6 +72,15 @@
             <Icon v-if="isDark" name="sun" size="md" />
             <Icon v-else name="moon" size="md" />
           </button>
+
+          <!-- Model Marketplace Button -->
+          <router-link
+            to="/models"
+            class="inline-flex items-center whitespace-nowrap rounded-full border border-gray-200 bg-white/80 px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:border-primary-200 hover:bg-primary-50 hover:text-primary-700 dark:border-dark-700 dark:bg-dark-800/80 dark:text-dark-200 dark:hover:border-primary-700 dark:hover:bg-primary-900/20 dark:hover:text-primary-200"
+          >
+            <Icon name="grid" size="xs" class="mr-1 hidden sm:block" />
+            <span>{{ t('home.modelMarketplace') }}</span>
+          </router-link>
 
           <!-- Login / Dashboard Button -->
           <router-link
@@ -410,6 +419,7 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { applyThemeClass } from '@/utils/theme'
 
 const { t } = useI18n()
 
@@ -457,14 +467,7 @@ function toggleTheme() {
 
 // Initialize theme
 function initTheme() {
-  const savedTheme = localStorage.getItem('theme')
-  if (
-    savedTheme === 'dark' ||
-    (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
-  ) {
-    isDark.value = true
-    document.documentElement.classList.add('dark')
-  }
+  isDark.value = applyThemeClass()
 }
 
 onMounted(() => {

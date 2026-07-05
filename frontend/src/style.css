@@ -9,6 +9,8 @@
 
   html {
     @apply scroll-smooth antialiased;
+    overflow-y: scroll;
+    scrollbar-gutter: stable both-edges;
   }
 
   body {
