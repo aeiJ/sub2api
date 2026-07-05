@@ -419,6 +419,7 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { applyThemeClass } from '@/utils/theme'
 
 const { t } = useI18n()
 
@@ -466,14 +467,7 @@ function toggleTheme() {
 
 // Initialize theme
 function initTheme() {
-  const savedTheme = localStorage.getItem('theme')
-  if (
-    savedTheme === 'dark' ||
-    (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
-  ) {
-    isDark.value = true
-    document.documentElement.classList.add('dark')
-  }
+  isDark.value = applyThemeClass()
 }
 
 onMounted(() => {

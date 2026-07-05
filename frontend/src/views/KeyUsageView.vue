@@ -423,6 +423,7 @@ import { useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { buildGatewayUrl } from '@/api/client'
+import { applyThemeClass } from '@/utils/theme'
 
 const { t, locale } = useI18n()
 const appStore = useAppStore()
@@ -906,11 +907,7 @@ async function queryKey() {
 // ==================== Lifecycle ====================
 
 function initTheme() {
-  const savedTheme = localStorage.getItem('theme')
-  if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-    isDark.value = true
-    document.documentElement.classList.add('dark')
-  }
+  isDark.value = applyThemeClass()
 }
 
 function formatResetTime(resetAt: string | null | undefined): string {
