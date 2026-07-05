@@ -12,92 +12,93 @@
     <div v-else v-html="homeContent"></div>
   </div>
 
-  <!-- Default Home Page -->
-  <div
-    v-else
-    class="relative flex min-h-screen flex-col overflow-hidden bg-gradient-to-br from-gray-50 via-primary-50/30 to-gray-100 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950"
-  >
-    <!-- Background Decorations -->
-    <div class="pointer-events-none absolute inset-0 overflow-hidden">
-      <div
-        class="absolute -right-40 -top-40 h-96 w-96 rounded-full bg-primary-400/20 blur-3xl"
-      ></div>
-      <div
-        class="absolute -bottom-40 -left-40 h-96 w-96 rounded-full bg-primary-500/15 blur-3xl"
-      ></div>
-      <div
-        class="absolute left-1/3 top-1/4 h-72 w-72 rounded-full bg-primary-300/10 blur-3xl"
-      ></div>
-      <div
-        class="absolute bottom-1/4 right-1/4 h-64 w-64 rounded-full bg-primary-400/10 blur-3xl"
-      ></div>
-      <div
-        class="absolute inset-0 bg-[linear-gradient(rgba(20,184,166,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(20,184,166,0.03)_1px,transparent_1px)] bg-[size:64px_64px]"
-      ></div>
-    </div>
+	  <!-- Default Home Page -->
+	  <div
+	    v-else
+	    class="home-quantum relative flex min-h-screen flex-col overflow-hidden"
+	    :class="isDark ? 'is-dark' : 'is-light'"
+	  >
+	    <!-- Background System -->
+	    <div class="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+	      <div class="quantum-grid absolute inset-0"></div>
+	      <div class="quantum-vignette absolute inset-0"></div>
+	      <div class="quantum-beam quantum-beam-a"></div>
+	      <div class="quantum-beam quantum-beam-b"></div>
+	      <div class="quantum-scanlines absolute inset-0"></div>
+	    </div>
 
-    <!-- Header -->
-    <header class="relative z-20 px-6 py-4">
-      <nav class="mx-auto flex max-w-6xl items-center justify-between">
-        <!-- Logo -->
-        <div class="flex items-center">
-          <div class="h-10 w-10 overflow-hidden rounded-xl shadow-md">
-            <img :src="siteLogo || '/logo.png'" alt="Logo" class="h-full w-full object-contain" />
-          </div>
-        </div>
+	    <!-- Header -->
+	    <header class="relative z-20 px-4 py-4 sm:px-6">
+	      <nav
+	        class="home-nav mx-auto flex max-w-7xl items-center justify-between px-3 py-3 backdrop-blur-xl sm:px-4"
+	      >
+	        <!-- Logo -->
+	        <div class="flex min-w-0 items-center gap-3">
+	          <div
+	            class="home-logo-frame flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden"
+	          >
+	            <img :src="siteLogo || '/logo.png'" alt="Logo" class="h-full w-full object-contain" />
+	          </div>
+	          <div class="hidden min-w-0 sm:block">
+	            <p class="home-brand-name truncate text-sm font-semibold tracking-[0.16em]">{{ siteName }}</p>
+	            <p class="home-brand-subtitle truncate text-[11px] uppercase tracking-[0.24em]">Quantum Gateway</p>
+	          </div>
+	        </div>
 
-        <!-- Nav Actions -->
+	        <!-- Nav Actions -->
         <div class="flex min-w-0 items-center gap-2 sm:gap-3">
           <!-- Language Switcher -->
-          <LocaleSwitcher />
+	          <div class="home-locale">
+	            <LocaleSwitcher />
+	          </div>
 
           <!-- Doc Link -->
           <a
             v-if="docUrl"
-            :href="docUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
-            :title="t('home.viewDocs')"
-          >
-            <Icon name="book" size="md" />
+	            :href="docUrl"
+	            target="_blank"
+	            rel="noopener noreferrer"
+	            class="home-icon-action rounded-lg p-2 transition-colors"
+	            :title="t('home.viewDocs')"
+	          >
+	            <Icon name="book" size="md" />
           </a>
 
-          <!-- Theme Toggle -->
-          <button
-            @click="toggleTheme"
-            class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
-            :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
-          >
-            <Icon v-if="isDark" name="sun" size="md" />
+	          <!-- Theme Toggle -->
+	          <button
+	            @click="toggleTheme"
+	            class="home-icon-action rounded-lg p-2 transition-colors"
+	            :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
+	          >
+	            <Icon v-if="isDark" name="sun" size="md" />
             <Icon v-else name="moon" size="md" />
           </button>
 
           <!-- Model Marketplace Button -->
-          <router-link
-            to="/models"
-            class="inline-flex items-center whitespace-nowrap rounded-full border border-gray-200 bg-white/80 px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:border-primary-200 hover:bg-primary-50 hover:text-primary-700 dark:border-dark-700 dark:bg-dark-800/80 dark:text-dark-200 dark:hover:border-primary-700 dark:hover:bg-primary-900/20 dark:hover:text-primary-200"
-          >
-            <Icon name="grid" size="xs" class="mr-1 hidden sm:block" />
-            <span>{{ t('home.modelMarketplace') }}</span>
+	          <router-link
+	            to="/models"
+	            class="home-secondary-pill inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium transition-colors"
+	          >
+	            <Icon name="grid" size="xs" class="mr-1 hidden sm:block" />
+	            <span>{{ t('home.modelMarketplace') }}</span>
           </router-link>
 
           <!-- Login / Dashboard Button -->
           <router-link
-            v-if="isAuthenticated"
-            :to="dashboardPath"
-            class="inline-flex items-center gap-1.5 rounded-full bg-gray-900 py-1 pl-1 pr-2.5 transition-colors hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700"
-          >
-            <span
-              class="flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-primary-400 to-primary-600 text-[10px] font-semibold text-white"
-            >
-              {{ userInitial }}
-            </span>
-            <span class="text-xs font-medium text-white">{{ t('home.dashboard') }}</span>
-            <svg
-              class="h-3 w-3 text-gray-400"
-              fill="none"
-              viewBox="0 0 24 24"
+	            v-if="isAuthenticated"
+	            :to="dashboardPath"
+	            class="home-primary-pill inline-flex items-center gap-1.5 rounded-full py-1 pl-1 pr-2.5 transition-colors"
+	          >
+	            <span
+	              class="home-user-initial flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold"
+	            >
+	              {{ userInitial }}
+	            </span>
+	            <span class="text-xs font-semibold">{{ t('home.dashboard') }}</span>
+	            <svg
+	              class="home-primary-arrow h-3 w-3"
+	              fill="none"
+	              viewBox="0 0 24 24"
               stroke="currentColor"
               stroke-width="2"
             >
@@ -108,62 +109,81 @@
               />
             </svg>
           </router-link>
-          <router-link
-            v-else
-            to="/login"
-            class="inline-flex items-center rounded-full bg-gray-900 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700"
-          >
-            {{ t('home.login') }}
-          </router-link>
+	          <router-link
+	            v-else
+	            to="/login"
+	            class="home-primary-pill inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold transition-colors"
+	          >
+	            {{ t('home.login') }}
+	          </router-link>
         </div>
       </nav>
     </header>
 
-    <!-- Main Content -->
-    <main class="relative z-10 flex-1 px-6 py-16">
-      <div class="mx-auto max-w-6xl">
-        <!-- Hero Section - Left/Right Layout -->
-        <div class="mb-12 flex flex-col items-center justify-between gap-12 lg:flex-row lg:gap-16">
-          <!-- Left: Text Content -->
-          <div class="flex-1 text-center lg:text-left">
-            <h1
-              class="mb-4 text-4xl font-bold text-gray-900 dark:text-white md:text-5xl lg:text-6xl"
-            >
-              {{ siteName }}
-            </h1>
-            <p class="mb-8 text-lg text-gray-600 dark:text-dark-300 md:text-xl">
-              {{ siteSubtitle }}
-            </p>
+	    <!-- Main Content -->
+	    <main class="relative z-10 flex-1 px-4 py-12 sm:px-6 lg:py-16">
+	      <div class="mx-auto max-w-7xl">
+	        <!-- Hero Section - Left/Right Layout -->
+	        <div class="mb-12 grid items-center gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.86fr)] lg:gap-16">
+	          <!-- Left: Text Content -->
+	          <div class="text-center lg:text-left">
+	            <div
+	              class="home-eyebrow mb-5 inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.24em]"
+	            >
+	              <span class="home-status-dot h-1.5 w-1.5 rounded-full"></span>
+	              Live API Routing Matrix
+	            </div>
+	            <h1
+	              class="quantum-title mx-auto mb-5 max-w-4xl text-4xl font-black leading-[1.02] sm:text-5xl md:text-6xl lg:mx-0 lg:text-7xl"
+	            >
+	              {{ siteName }}
+	            </h1>
+	            <p class="home-hero-subtitle mx-auto mb-8 max-w-2xl text-base leading-8 sm:text-lg md:text-xl lg:mx-0">
+	              {{ siteSubtitle }}
+	            </p>
 
-            <!-- CTA Button -->
-            <div>
-              <router-link
-                :to="isAuthenticated ? dashboardPath : '/login'"
-                class="btn btn-primary px-8 py-3 text-base shadow-lg shadow-primary-500/30"
-              >
-                {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
-                <Icon name="arrowRight" size="md" class="ml-2" :stroke-width="2" />
-              </router-link>
-            </div>
-          </div>
+	            <!-- CTA Button -->
+	            <div class="flex flex-col items-center gap-3 sm:flex-row lg:justify-start">
+	              <router-link
+	                :to="isAuthenticated ? dashboardPath : '/login'"
+	                class="home-cta-primary group inline-flex min-h-[48px] items-center justify-center rounded-full px-7 py-3 text-base font-bold transition-all duration-300 hover:-translate-y-0.5"
+	              >
+	                {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
+	                <Icon name="arrowRight" size="md" class="ml-2 transition-transform group-hover:translate-x-1" :stroke-width="2" />
+	              </router-link>
+	              <router-link
+	                to="/models"
+	                class="home-cta-secondary inline-flex min-h-[48px] items-center justify-center rounded-full px-7 py-3 text-base font-semibold transition-all duration-300"
+	              >
+	                {{ t('home.modelMarketplace') }}
+	              </router-link>
+	            </div>
+	          </div>
 
-          <!-- Right: Terminal Animation -->
-          <div class="flex flex-1 justify-center lg:justify-end">
-            <div class="terminal-container">
-              <div class="terminal-window">
-                <!-- Window header -->
-                <div class="terminal-header">
-                  <div class="terminal-buttons">
+	          <!-- Right: Command Deck -->
+	          <div class="flex justify-center lg:justify-end">
+	            <div class="command-deck w-full max-w-[520px]">
+	              <div class="deck-frame">
+	                <div class="deck-orbit" aria-hidden="true"></div>
+	                <div class="deck-status">
+	                  <span>UPSTREAM SYNC</span>
+	                  <strong>99.99%</strong>
+	                </div>
+	              </div>
+	              <div class="terminal-window">
+	                <!-- Window header -->
+	                <div class="terminal-header">
+	                  <div class="terminal-buttons">
                     <span class="btn-close"></span>
                     <span class="btn-minimize"></span>
                     <span class="btn-maximize"></span>
                   </div>
-                  <span class="terminal-title">terminal</span>
-                </div>
-                <!-- Terminal content -->
-                <div class="terminal-body">
-                  <div class="code-line line-1">
-                    <span class="code-prompt">$</span>
+	                  <span class="terminal-title">sub2api.quantum</span>
+	                </div>
+	                <!-- Terminal content -->
+	                <div class="terminal-body">
+	                  <div class="code-line line-1">
+	                    <span class="code-prompt">$</span>
                     <span class="code-cmd">curl</span>
                     <span class="code-flag">-X POST</span>
                     <span class="code-url">/v1/messages</span>
@@ -171,78 +191,92 @@
                   <div class="code-line line-2">
                     <span class="code-comment"># Routing to upstream...</span>
                   </div>
-                  <div class="code-line line-3">
-                    <span class="code-success">200 OK</span>
-                    <span class="code-response">{ "content": "Hello!" }</span>
-                  </div>
-                  <div class="code-line line-4">
-                    <span class="code-prompt">$</span>
-                    <span class="cursor"></span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+	                  <div class="code-line line-3">
+	                    <span class="code-success">200 OK</span>
+	                    <span class="code-response">{ "content": "Hello!" }</span>
+	                  </div>
+	                  <div class="code-line line-4">
+	                    <span class="code-prompt">$</span>
+	                    <span class="cursor"></span>
+	                  </div>
+	                </div>
+	              </div>
+	              <div class="metrics-grid">
+	                <div>
+	                  <span>Latency</span>
+	                  <strong>38ms</strong>
+	                </div>
+	                <div>
+	                  <span>Failover</span>
+	                  <strong>Auto</strong>
+	                </div>
+	                <div>
+	                  <span>Billing</span>
+	                  <strong>Live</strong>
+	                </div>
+	              </div>
+	            </div>
+	          </div>
+	        </div>
 
-        <!-- Feature Tags - Centered -->
-        <div class="mb-12 flex flex-wrap items-center justify-center gap-4 md:gap-6">
-          <div
-            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
-          >
-            <Icon name="swap" size="sm" class="text-primary-500" />
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
-              t('home.tags.subscriptionToApi')
-            }}</span>
-          </div>
-          <div
-            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
-          >
-            <Icon name="shield" size="sm" class="text-primary-500" />
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
-              t('home.tags.stickySession')
-            }}</span>
-          </div>
-          <div
-            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
-          >
-            <Icon name="chart" size="sm" class="text-primary-500" />
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
-              t('home.tags.realtimeBilling')
-            }}</span>
-          </div>
-        </div>
+	        <!-- Feature Tags - Centered -->
+	        <div class="mb-12 flex flex-wrap items-center justify-center gap-3 md:gap-4">
+	          <div
+	            class="home-tag home-tag-cyan inline-flex items-center gap-2.5 rounded-full px-5 py-2.5 backdrop-blur-sm"
+	          >
+	            <Icon name="swap" size="sm" />
+	            <span class="text-sm font-medium">{{
+	              t('home.tags.subscriptionToApi')
+	            }}</span>
+	          </div>
+	          <div
+	            class="home-tag home-tag-violet inline-flex items-center gap-2.5 rounded-full px-5 py-2.5 backdrop-blur-sm"
+	          >
+	            <Icon name="shield" size="sm" />
+	            <span class="text-sm font-medium">{{
+	              t('home.tags.stickySession')
+	            }}</span>
+	          </div>
+	          <div
+	            class="home-tag home-tag-fuchsia inline-flex items-center gap-2.5 rounded-full px-5 py-2.5 backdrop-blur-sm"
+	          >
+	            <Icon name="chart" size="sm" />
+	            <span class="text-sm font-medium">{{
+	              t('home.tags.realtimeBilling')
+	            }}</span>
+	          </div>
+	        </div>
 
-        <!-- Features Grid -->
-        <div class="mb-12 grid gap-6 md:grid-cols-3">
-          <!-- Feature 1: Unified Gateway -->
-          <div
-            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
-          >
-            <div
-              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 shadow-lg shadow-blue-500/30 transition-transform group-hover:scale-110"
-            >
-              <Icon name="server" size="lg" class="text-white" />
-            </div>
-            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
-              {{ t('home.features.unifiedGateway') }}
-            </h3>
-            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
-              {{ t('home.features.unifiedGatewayDesc') }}
-            </p>
-          </div>
+	        <!-- Features Grid -->
+	        <div class="mb-12 grid gap-6 md:grid-cols-3">
+	          <!-- Feature 1: Unified Gateway -->
+	          <div
+	            class="quantum-card group p-6 transition-all duration-300 hover:-translate-y-1"
+	          >
+	            <div
+	              class="home-feature-icon home-feature-icon-cyan mb-4 flex h-12 w-12 items-center justify-center transition-transform group-hover:scale-110"
+	            >
+	              <Icon name="server" size="lg" />
+	            </div>
+	            <h3 class="home-section-heading mb-2 text-lg font-semibold">
+	              {{ t('home.features.unifiedGateway') }}
+	            </h3>
+	            <p class="home-muted-text text-sm leading-relaxed">
+	              {{ t('home.features.unifiedGatewayDesc') }}
+	            </p>
+	          </div>
 
-          <!-- Feature 2: Account Pool -->
-          <div
-            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
-          >
-            <div
-              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 shadow-lg shadow-primary-500/30 transition-transform group-hover:scale-110"
-            >
-              <svg
-                class="h-6 w-6 text-white"
-                fill="none"
-                viewBox="0 0 24 24"
+	          <!-- Feature 2: Account Pool -->
+	          <div
+	            class="quantum-card group p-6 transition-all duration-300 hover:-translate-y-1"
+	          >
+	            <div
+	              class="home-feature-icon home-feature-icon-violet mb-4 flex h-12 w-12 items-center justify-center transition-transform group-hover:scale-110"
+	            >
+	              <svg
+	                class="h-6 w-6"
+	                fill="none"
+	                viewBox="0 0 24 24"
                 stroke="currentColor"
                 stroke-width="1.5"
               >
@@ -250,28 +284,28 @@
                   stroke-linecap="round"
                   stroke-linejoin="round"
                   d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"
-                />
-              </svg>
-            </div>
-            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
-              {{ t('home.features.multiAccount') }}
-            </h3>
-            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
-              {{ t('home.features.multiAccountDesc') }}
-            </p>
-          </div>
+	                />
+	              </svg>
+	            </div>
+	            <h3 class="home-section-heading mb-2 text-lg font-semibold">
+	              {{ t('home.features.multiAccount') }}
+	            </h3>
+	            <p class="home-muted-text text-sm leading-relaxed">
+	              {{ t('home.features.multiAccountDesc') }}
+	            </p>
+	          </div>
 
-          <!-- Feature 3: Billing & Quota -->
-          <div
-            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
-          >
-            <div
-              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-purple-500 to-purple-600 shadow-lg shadow-purple-500/30 transition-transform group-hover:scale-110"
-            >
-              <svg
-                class="h-6 w-6 text-white"
-                fill="none"
-                viewBox="0 0 24 24"
+	          <!-- Feature 3: Billing & Quota -->
+	          <div
+	            class="quantum-card group p-6 transition-all duration-300 hover:-translate-y-1"
+	          >
+	            <div
+	              class="home-feature-icon home-feature-icon-fuchsia mb-4 flex h-12 w-12 items-center justify-center transition-transform group-hover:scale-110"
+	            >
+	              <svg
+	                class="h-6 w-6"
+	                fill="none"
+	                viewBox="0 0 24 24"
                 stroke="currentColor"
                 stroke-width="1.5"
               >
@@ -279,134 +313,134 @@
                   stroke-linecap="round"
                   stroke-linejoin="round"
                   d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75M15 10.5a3 3 0 11-6 0 3 3 0 016 0zm3 0h.008v.008H18V10.5zm-12 0h.008v.008H6V10.5z"
-                />
-              </svg>
-            </div>
-            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
-              {{ t('home.features.balanceQuota') }}
-            </h3>
-            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
-              {{ t('home.features.balanceQuotaDesc') }}
-            </p>
-          </div>
-        </div>
+	                />
+	              </svg>
+	            </div>
+	            <h3 class="home-section-heading mb-2 text-lg font-semibold">
+	              {{ t('home.features.balanceQuota') }}
+	            </h3>
+	            <p class="home-muted-text text-sm leading-relaxed">
+	              {{ t('home.features.balanceQuotaDesc') }}
+	            </p>
+	          </div>
+	        </div>
 
-        <!-- Supported Providers -->
-        <div class="mb-8 text-center">
-          <h2 class="mb-3 text-2xl font-bold text-gray-900 dark:text-white">
-            {{ t('home.providers.title') }}
-          </h2>
-          <p class="text-sm text-gray-600 dark:text-dark-400">
-            {{ t('home.providers.description') }}
-          </p>
-        </div>
+	        <!-- Supported Providers -->
+	        <div class="mb-8 text-center">
+	          <h2 class="home-section-heading mb-3 text-2xl font-bold">
+	            {{ t('home.providers.title') }}
+	          </h2>
+	          <p class="home-muted-text text-sm">
+	            {{ t('home.providers.description') }}
+	          </p>
+	        </div>
 
-        <div class="mb-16 flex flex-wrap items-center justify-center gap-4">
-          <!-- Claude - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-orange-400 to-orange-500"
-            >
-              <span class="text-xs font-bold text-white">C</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.claude') }}</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
-          </div>
-          <!-- GPT - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-green-500 to-green-600"
-            >
-              <span class="text-xs font-bold text-white">G</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">GPT</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
-          </div>
-          <!-- Gemini - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-blue-600"
-            >
-              <span class="text-xs font-bold text-white">G</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.gemini') }}</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
-          </div>
-          <!-- Antigravity - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-rose-500 to-pink-600"
-            >
-              <span class="text-xs font-bold text-white">A</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.antigravity') }}</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
-          </div>
-          <!-- More - Coming Soon -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-gray-200/50 bg-white/40 px-5 py-3 opacity-60 backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/40"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-gray-500 to-gray-600"
-            >
-              <span class="text-xs font-bold text-white">+</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.more') }}</span>
-            <span
-              class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-dark-700 dark:text-dark-400"
-              >{{ t('home.providers.soon') }}</span
-            >
-          </div>
+	        <div class="mb-16 flex flex-wrap items-center justify-center gap-4">
+	          <!-- Claude - Supported -->
+	          <div
+	            class="provider-chip"
+	          >
+	            <div
+	              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-orange-400 to-orange-500"
+	            >
+	              <span class="text-xs font-bold text-white">C</span>
+	            </div>
+	            <span class="home-provider-name text-sm font-medium">{{ t('home.providers.claude') }}</span>
+	            <span
+	              class="home-provider-status rounded px-1.5 py-0.5 text-[10px] font-medium"
+	              >{{ t('home.providers.supported') }}</span
+	            >
+	          </div>
+	          <!-- GPT - Supported -->
+	          <div
+	            class="provider-chip"
+	          >
+	            <div
+	              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-green-500 to-green-600"
+	            >
+	              <span class="text-xs font-bold text-white">G</span>
+	            </div>
+	            <span class="home-provider-name text-sm font-medium">GPT</span>
+	            <span
+	              class="home-provider-status rounded px-1.5 py-0.5 text-[10px] font-medium"
+	              >{{ t('home.providers.supported') }}</span
+	            >
+	          </div>
+	          <!-- Gemini - Supported -->
+	          <div
+	            class="provider-chip"
+	          >
+	            <div
+	              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-blue-600"
+	            >
+	              <span class="text-xs font-bold text-white">G</span>
+	            </div>
+	            <span class="home-provider-name text-sm font-medium">{{ t('home.providers.gemini') }}</span>
+	            <span
+	              class="home-provider-status rounded px-1.5 py-0.5 text-[10px] font-medium"
+	              >{{ t('home.providers.supported') }}</span
+	            >
+	          </div>
+	          <!-- Antigravity - Supported -->
+	          <div
+	            class="provider-chip"
+	          >
+	            <div
+	              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-rose-500 to-pink-600"
+	            >
+	              <span class="text-xs font-bold text-white">A</span>
+	            </div>
+	            <span class="home-provider-name text-sm font-medium">{{ t('home.providers.antigravity') }}</span>
+	            <span
+	              class="home-provider-status rounded px-1.5 py-0.5 text-[10px] font-medium"
+	              >{{ t('home.providers.supported') }}</span
+	            >
+	          </div>
+	          <!-- More - Coming Soon -->
+	          <div
+	            class="provider-chip opacity-60"
+	          >
+	            <div
+	              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-gray-500 to-gray-600"
+	            >
+	              <span class="text-xs font-bold text-white">+</span>
+	            </div>
+	            <span class="home-provider-name text-sm font-medium">{{ t('home.providers.more') }}</span>
+	            <span
+	              class="home-provider-status rounded px-1.5 py-0.5 text-[10px] font-medium"
+	              >{{ t('home.providers.soon') }}</span
+	            >
+	          </div>
         </div>
       </div>
     </main>
 
-    <!-- Footer -->
-    <footer class="relative z-10 border-t border-gray-200/50 px-6 py-8 dark:border-dark-800/50">
-      <div
-        class="mx-auto flex max-w-6xl flex-col items-center justify-center gap-4 text-center sm:flex-row sm:text-left"
-      >
-        <p class="text-sm text-gray-500 dark:text-dark-400">
-          &copy; {{ currentYear }} {{ siteName }}. {{ t('home.footer.allRightsReserved') }}
-        </p>
-        <div class="flex items-center gap-4">
+	    <!-- Footer -->
+	    <footer class="home-footer relative z-10 px-6 py-8">
+	      <div
+	        class="mx-auto flex max-w-6xl flex-col items-center justify-center gap-4 text-center sm:flex-row sm:text-left"
+	      >
+	        <p class="home-footer-text text-sm">
+	          &copy; {{ currentYear }} {{ siteName }}. {{ t('home.footer.allRightsReserved') }}
+	        </p>
+	        <div class="flex items-center gap-4">
           <a
             v-if="docUrl"
-            :href="docUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-dark-400 dark:hover:text-white"
-          >
-            {{ t('home.docs') }}
-          </a>
+	            :href="docUrl"
+	            target="_blank"
+	            rel="noopener noreferrer"
+	            class="home-footer-link text-sm transition-colors"
+	          >
+	            {{ t('home.docs') }}
+	          </a>
           <a
-            :href="githubUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-dark-400 dark:hover:text-white"
-          >
-            GitHub
-          </a>
+	            :href="githubUrl"
+	            target="_blank"
+	            rel="noopener noreferrer"
+	            class="home-footer-link text-sm transition-colors"
+	          >
+	            GitHub
+	          </a>
         </div>
       </div>
     </footer>
@@ -484,37 +518,414 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* Terminal Container */
-.terminal-container {
-  position: relative;
-  display: inline-block;
+.home-quantum {
+  --home-bg: #f6fbff;
+  --home-bg-rgb: 246, 251, 255;
+  --home-text: #102033;
+  --home-heading: #061426;
+  --home-muted: rgba(16, 32, 51, 0.68);
+  --home-subtle: rgba(16, 32, 51, 0.54);
+  --home-grid-rgb: 8, 145, 178;
+  --home-cyan: #007a91;
+  --home-cyan-bright: #0891b2;
+  --home-violet: #6045d8;
+  --home-fuchsia: #b91ca8;
+  --home-nav-bg: rgba(255, 255, 255, 0.78);
+  --home-panel-bg: linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(232, 246, 255, 0.78));
+  --home-panel-border: rgba(8, 145, 178, 0.22);
+  --home-panel-highlight: rgba(8, 145, 178, 0.54);
+  --home-panel-shadow: 0 22px 60px rgba(15, 52, 82, 0.14);
+  --home-chip-bg: rgba(255, 255, 255, 0.72);
+  --home-chip-border: rgba(8, 145, 178, 0.2);
+  --home-primary-bg: #073042;
+  --home-primary-text: #e7fdff;
+  --home-primary-hover: #0b475c;
+  --home-secondary-bg: rgba(96, 69, 216, 0.1);
+  --home-secondary-text: #3f2bb4;
+  --home-secondary-border: rgba(96, 69, 216, 0.24);
+  --home-footer-border: rgba(8, 145, 178, 0.16);
+  --home-terminal-bg: linear-gradient(145deg, rgba(13, 14, 34, 0.97) 0%, rgba(5, 5, 16, 0.98) 100%);
+  --home-terminal-text: #e0e0ff;
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(0, 188, 212, 0.18), transparent 38%),
+    radial-gradient(ellipse at 90% 26%, rgba(123, 97, 255, 0.14), transparent 34%),
+    linear-gradient(180deg, var(--home-bg), #eef8ff 72%, #f8fbff);
+  color: var(--home-text);
+  isolation: isolate;
 }
 
-/* Terminal Window */
-.terminal-window {
-  width: 420px;
-  background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
-  border-radius: 14px;
-  box-shadow:
-    0 25px 50px -12px rgba(0, 0, 0, 0.4),
-    0 0 0 1px rgba(255, 255, 255, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+.home-quantum.is-dark {
+  --home-bg: #050510;
+  --home-bg-rgb: 5, 5, 16;
+  --home-text: #e0e0ff;
+  --home-heading: #ffffff;
+  --home-muted: rgba(224, 224, 255, 0.64);
+  --home-subtle: rgba(224, 224, 255, 0.5);
+  --home-grid-rgb: 0, 255, 255;
+  --home-cyan: #00ffff;
+  --home-cyan-bright: #00ffff;
+  --home-violet: #7b61ff;
+  --home-fuchsia: #ff00ff;
+  --home-nav-bg: rgba(7, 10, 24, 0.7);
+  --home-panel-bg: linear-gradient(145deg, rgba(10, 16, 35, 0.82), rgba(8, 8, 24, 0.72));
+  --home-panel-border: rgba(0, 255, 255, 0.16);
+  --home-panel-highlight: rgba(0, 255, 255, 0.72);
+  --home-panel-shadow: 0 20px 54px rgba(0, 0, 0, 0.24);
+  --home-chip-bg: rgba(8, 12, 28, 0.72);
+  --home-chip-border: rgba(0, 255, 255, 0.16);
+  --home-primary-bg: #00ffff;
+  --home-primary-text: #050510;
+  --home-primary-hover: #a5ffff;
+  --home-secondary-bg: rgba(123, 97, 255, 0.1);
+  --home-secondary-text: #ede9ff;
+  --home-secondary-border: rgba(196, 181, 253, 0.28);
+  --home-footer-border: rgba(0, 255, 255, 0.1);
+  --home-terminal-bg: linear-gradient(145deg, rgba(13, 14, 34, 0.96) 0%, rgba(5, 5, 16, 0.98) 100%);
+  --home-terminal-text: #e0e0ff;
+  background: #050510;
+}
+
+.quantum-grid {
+  background:
+    linear-gradient(rgba(var(--home-grid-rgb), 0.09) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(var(--home-grid-rgb), 0.09) 1px, transparent 1px),
+    linear-gradient(115deg, color-mix(in srgb, var(--home-violet) 18%, transparent), transparent 36%, color-mix(in srgb, var(--home-fuchsia) 12%, transparent));
+  background-size: 56px 56px, 56px 56px, 100% 100%;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.92), rgba(0, 0, 0, 0.3) 68%, transparent);
+  opacity: 0.58;
+}
+
+.quantum-vignette {
+  background:
+    radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--home-cyan) 18%, transparent), transparent 36%),
+    radial-gradient(ellipse at 85% 36%, color-mix(in srgb, var(--home-violet) 20%, transparent), transparent 34%),
+    linear-gradient(180deg, rgba(var(--home-bg-rgb), 0) 0%, rgba(var(--home-bg-rgb), 0.88) 82%);
+}
+
+.quantum-scanlines {
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(var(--home-grid-rgb), 0.035) 0,
+    rgba(var(--home-grid-rgb), 0.035) 1px,
+    transparent 1px,
+    transparent 6px
+  );
+  mix-blend-mode: screen;
+  opacity: 0.42;
+}
+
+.quantum-beam {
+  position: absolute;
+  height: 1px;
+  width: 58vw;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--home-cyan) 72%, transparent), transparent);
+  box-shadow: 0 0 28px color-mix(in srgb, var(--home-cyan) 42%, transparent);
+}
+
+.quantum-beam-a {
+  right: -12vw;
+  top: 24%;
+  transform: rotate(-16deg);
+}
+
+.quantum-beam-b {
+  bottom: 31%;
+  left: -14vw;
+  transform: rotate(13deg);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--home-fuchsia) 58%, transparent), transparent);
+  box-shadow: 0 0 28px color-mix(in srgb, var(--home-fuchsia) 28%, transparent);
+}
+
+.quantum-title {
+  color: var(--home-heading);
+  text-shadow:
+    0 0 18px color-mix(in srgb, var(--home-cyan) 28%, transparent),
+    0 0 54px color-mix(in srgb, var(--home-violet) 28%, transparent);
+}
+
+.home-nav {
+  border: 1px solid var(--home-panel-border);
+  background: var(--home-nav-bg);
+  box-shadow: 0 0 40px color-mix(in srgb, var(--home-cyan) 10%, transparent);
+}
+
+.home-logo-frame {
+  border: 1px solid color-mix(in srgb, var(--home-cyan) 34%, transparent);
+  background: color-mix(in srgb, var(--home-cyan) 12%, transparent);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--home-cyan) 22%, transparent);
+}
+
+.home-brand-name,
+.home-section-heading,
+.home-provider-name {
+  color: var(--home-heading);
+}
+
+.home-brand-subtitle,
+.home-hero-subtitle,
+.home-muted-text,
+.home-footer-text,
+.home-footer-link {
+  color: var(--home-muted);
+}
+
+.home-icon-action {
+  border: 1px solid color-mix(in srgb, var(--home-cyan) 14%, transparent);
+  background: color-mix(in srgb, var(--home-cyan) 5%, transparent);
+  color: var(--home-subtle);
+}
+
+.home-icon-action:hover {
+  border-color: color-mix(in srgb, var(--home-cyan) 42%, transparent);
+  background: color-mix(in srgb, var(--home-cyan) 12%, transparent);
+  color: var(--home-heading);
+}
+
+.home-primary-pill,
+.home-cta-primary {
+  background: var(--home-primary-bg);
+  color: var(--home-primary-text);
+  box-shadow: 0 0 28px color-mix(in srgb, var(--home-cyan) 32%, transparent);
+}
+
+.home-primary-pill:hover,
+.home-cta-primary:hover {
+  background: var(--home-primary-hover);
+}
+
+.home-user-initial {
+  background: rgba(var(--home-bg-rgb), 0.92);
+  color: var(--home-cyan-bright);
+}
+
+.home-primary-arrow {
+  color: color-mix(in srgb, var(--home-primary-text) 74%, transparent);
+}
+
+.home-secondary-pill,
+.home-cta-secondary {
+  border: 1px solid var(--home-secondary-border);
+  background: var(--home-secondary-bg);
+  color: var(--home-secondary-text);
+}
+
+.home-secondary-pill:hover,
+.home-cta-secondary:hover {
+  border-color: color-mix(in srgb, var(--home-violet) 58%, transparent);
+  background: color-mix(in srgb, var(--home-violet) 16%, transparent);
+}
+
+.home-eyebrow,
+.home-tag {
+  border: 1px solid var(--home-chip-border);
+  background: color-mix(in srgb, var(--home-cyan) 10%, transparent);
+  color: var(--home-cyan);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--home-cyan) 12%, transparent);
+}
+
+.home-status-dot {
+  background: var(--home-cyan-bright);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--home-cyan) 75%, transparent);
+}
+
+.home-tag-violet {
+  background: color-mix(in srgb, var(--home-violet) 10%, transparent);
+  color: var(--home-violet);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--home-violet) 12%, transparent);
+}
+
+.home-tag-fuchsia {
+  background: color-mix(in srgb, var(--home-fuchsia) 10%, transparent);
+  color: var(--home-fuchsia);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--home-fuchsia) 12%, transparent);
+}
+
+.home-feature-icon {
+  border: 1px solid color-mix(in srgb, var(--home-cyan) 32%, transparent);
+  background: color-mix(in srgb, var(--home-cyan) 12%, transparent);
+  color: var(--home-cyan);
+  box-shadow: 0 0 26px color-mix(in srgb, var(--home-cyan) 22%, transparent);
+}
+
+.home-feature-icon-violet {
+  border-color: color-mix(in srgb, var(--home-violet) 32%, transparent);
+  background: color-mix(in srgb, var(--home-violet) 12%, transparent);
+  color: var(--home-violet);
+  box-shadow: 0 0 26px color-mix(in srgb, var(--home-violet) 22%, transparent);
+}
+
+.home-feature-icon-fuchsia {
+  border-color: color-mix(in srgb, var(--home-fuchsia) 32%, transparent);
+  background: color-mix(in srgb, var(--home-fuchsia) 12%, transparent);
+  color: var(--home-fuchsia);
+  box-shadow: 0 0 26px color-mix(in srgb, var(--home-fuchsia) 20%, transparent);
+}
+
+.home-footer {
+  border-top: 1px solid var(--home-footer-border);
+}
+
+.home-footer-link:hover {
+  color: var(--home-heading);
+}
+
+.home-locale :deep(button) {
+  border: 1px solid color-mix(in srgb, var(--home-cyan) 14%, transparent);
+  background: color-mix(in srgb, var(--home-cyan) 5%, transparent);
+  color: var(--home-subtle);
+}
+
+.home-locale :deep(button:hover) {
+  border-color: color-mix(in srgb, var(--home-cyan) 42%, transparent);
+  background: color-mix(in srgb, var(--home-cyan) 12%, transparent);
+  color: var(--home-heading);
+}
+
+.home-locale :deep(.absolute) {
+  border-color: color-mix(in srgb, var(--home-cyan) 22%, transparent);
+  background: color-mix(in srgb, var(--home-bg) 94%, white);
+  box-shadow: 0 20px 48px rgba(15, 52, 82, 0.18), 0 0 30px color-mix(in srgb, var(--home-cyan) 10%, transparent);
+}
+
+.quantum-card {
+  position: relative;
   overflow: hidden;
-  transform: perspective(1000px) rotateX(2deg) rotateY(-2deg);
-  transition: transform 0.3s ease;
+  border: 1px solid var(--home-panel-border);
+  border-radius: 8px;
+  background: var(--home-panel-bg);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    var(--home-panel-shadow);
+  backdrop-filter: blur(18px);
+}
+
+.quantum-card::before,
+.provider-chip::before {
+  position: absolute;
+  top: 0;
+  left: 12px;
+  right: 12px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--home-panel-highlight), transparent);
+  content: '';
+}
+
+.quantum-card:hover {
+  border-color: color-mix(in srgb, var(--home-cyan) 36%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 24px 64px rgba(15, 52, 82, 0.18),
+    0 0 36px color-mix(in srgb, var(--home-cyan) 12%, transparent);
+}
+
+.provider-chip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--home-chip-border);
+  border-radius: 8px;
+  background: var(--home-chip-bg);
+  padding: 0.75rem 1.25rem;
+  box-shadow: 0 12px 38px rgba(15, 52, 82, 0.14);
+  backdrop-filter: blur(16px);
+}
+
+.home-provider-status {
+  background: color-mix(in srgb, var(--home-cyan) 14%, transparent);
+  color: var(--home-cyan);
+}
+
+.command-deck {
+  position: relative;
+}
+
+.deck-frame {
+  position: absolute;
+  inset: -24px -18px auto auto;
+  z-index: -1;
+  height: 180px;
+  width: 180px;
+  border: 1px solid color-mix(in srgb, var(--home-cyan) 20%, transparent);
+  border-radius: 8px;
+  transform: rotate(8deg);
+}
+
+.deck-frame::before,
+.deck-frame::after {
+  position: absolute;
+  border: 1px solid color-mix(in srgb, var(--home-violet) 24%, transparent);
+  content: '';
+}
+
+.deck-frame::before {
+  inset: 22px;
+}
+
+.deck-frame::after {
+  inset: 50px;
+  border-color: color-mix(in srgb, var(--home-fuchsia) 20%, transparent);
+}
+
+.deck-orbit {
+  position: absolute;
+  inset: 72px;
+  border: 1px solid color-mix(in srgb, var(--home-cyan) 34%, transparent);
+  transform: rotate(45deg);
+}
+
+.deck-status {
+  position: absolute;
+  right: 12px;
+  bottom: -18px;
+  display: flex;
+  min-width: 136px;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--home-cyan) 24%, transparent);
+  background: color-mix(in srgb, var(--home-bg) 88%, black);
+  padding: 8px 10px;
+  color: var(--home-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+}
+
+.deck-status strong {
+  color: var(--home-cyan-bright);
+}
+
+.terminal-window {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--home-cyan) 24%, transparent);
+  border-radius: 8px;
+  background:
+    var(--home-terminal-bg),
+    linear-gradient(90deg, color-mix(in srgb, var(--home-cyan) 12%, transparent), color-mix(in srgb, var(--home-violet) 12%, transparent));
+  box-shadow:
+    0 30px 80px rgba(0, 0, 0, 0.44),
+    0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 0 48px color-mix(in srgb, var(--home-cyan) 12%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transform: perspective(1000px) rotateX(2deg) rotateY(-3deg);
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 
 .terminal-window:hover {
+  box-shadow:
+    0 34px 88px rgba(0, 0, 0, 0.5),
+    0 0 58px color-mix(in srgb, var(--home-cyan) 18%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
   transform: perspective(1000px) rotateX(0deg) rotateY(0deg) translateY(-4px);
 }
 
-/* Terminal Header */
 .terminal-header {
   display: flex;
   align-items: center;
+  border-bottom: 1px solid color-mix(in srgb, var(--home-cyan) 12%, transparent);
+  background: rgba(255, 255, 255, 0.035);
   padding: 12px 16px;
-  background: rgba(30, 41, 59, 0.8);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .terminal-buttons {
@@ -523,43 +934,48 @@ onMounted(() => {
 }
 
 .terminal-buttons span {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
+  height: 10px;
+  width: 10px;
+  border-radius: 999px;
 }
 
 .btn-close {
-  background: #ef4444;
+  background: #ff3333;
+  box-shadow: 0 0 12px rgba(255, 51, 51, 0.48);
 }
+
 .btn-minimize {
-  background: #eab308;
+  background: #ff00ff;
+  box-shadow: 0 0 12px rgba(255, 0, 255, 0.42);
 }
+
 .btn-maximize {
-  background: #22c55e;
+  background: #00ffff;
+  box-shadow: 0 0 12px rgba(0, 255, 255, 0.52);
 }
 
 .terminal-title {
   flex: 1;
-  text-align: center;
+  margin-right: 48px;
+  color: rgba(224, 224, 255, 0.56);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
-  font-family: ui-monospace, monospace;
-  color: #64748b;
-  margin-right: 52px;
+  text-align: center;
 }
 
-/* Terminal Body */
 .terminal-body {
-  padding: 20px 24px;
-  font-family: ui-monospace, 'Fira Code', monospace;
+  min-height: 198px;
+  padding: 24px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 14px;
   line-height: 2;
 }
 
 .code-line {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
   opacity: 0;
   animation: line-appear 0.5s ease forwards;
 }
@@ -567,12 +983,15 @@ onMounted(() => {
 .line-1 {
   animation-delay: 0.3s;
 }
+
 .line-2 {
   animation-delay: 1s;
 }
+
 .line-3 {
   animation-delay: 1.8s;
 }
+
 .line-4 {
   animation-delay: 2.5s;
 }
@@ -589,39 +1008,46 @@ onMounted(() => {
 }
 
 .code-prompt {
-  color: #22c55e;
-  font-weight: bold;
-}
-.code-cmd {
-  color: #38bdf8;
-}
-.code-flag {
-  color: #a78bfa;
-}
-.code-url {
-  color: #14b8a6;
-}
-.code-comment {
-  color: #64748b;
-  font-style: italic;
-}
-.code-success {
-  color: #22c55e;
-  background: rgba(34, 197, 94, 0.15);
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-weight: 600;
-}
-.code-response {
-  color: #fbbf24;
+  color: #00ffff;
+  font-weight: 700;
 }
 
-/* Blinking Cursor */
+.code-cmd {
+  color: var(--home-terminal-text);
+}
+
+.code-flag {
+  color: #ff00ff;
+}
+
+.code-url {
+  color: #9b87ff;
+}
+
+.code-comment {
+  color: rgba(224, 224, 255, 0.52);
+  font-style: italic;
+}
+
+.code-success {
+  border: 1px solid rgba(0, 255, 255, 0.22);
+  border-radius: 4px;
+  background: rgba(0, 255, 255, 0.1);
+  color: #00ffff;
+  padding: 2px 8px;
+  font-weight: 700;
+}
+
+.code-response {
+  color: var(--home-terminal-text);
+}
+
 .cursor {
   display: inline-block;
-  width: 8px;
   height: 16px;
-  background: #22c55e;
+  width: 8px;
+  background: #00ffff;
+  box-shadow: 0 0 14px rgba(0, 255, 255, 0.78);
   animation: blink 1s step-end infinite;
 }
 
@@ -636,12 +1062,63 @@ onMounted(() => {
   }
 }
 
-/* Dark mode adjustments */
-:deep(.dark) .terminal-window {
-  box-shadow:
-    0 25px 50px -12px rgba(0, 0, 0, 0.6),
-    0 0 0 1px rgba(20, 184, 166, 0.2),
-    0 0 40px rgba(20, 184, 166, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.metrics-grid div {
+  border: 1px solid color-mix(in srgb, var(--home-cyan) 16%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--home-bg) 82%, black);
+  padding: 12px;
+  backdrop-filter: blur(12px);
+}
+
+.metrics-grid span,
+.metrics-grid strong {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.metrics-grid span {
+  color: var(--home-muted);
+  font-size: 11px;
+}
+
+.metrics-grid strong {
+  margin-top: 4px;
+  color: var(--home-cyan-bright);
+  font-size: 16px;
+}
+
+@media (max-width: 640px) {
+  .quantum-grid {
+    background-size: 38px 38px, 38px 38px, 100% 100%;
+  }
+
+  .deck-frame {
+    display: none;
+  }
+
+  .terminal-window {
+    transform: none;
+  }
+
+  .terminal-window:hover {
+    transform: translateY(-2px);
+  }
+
+  .terminal-body {
+    min-height: 180px;
+    padding: 18px;
+    font-size: 12px;
+  }
+
+  .metrics-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
