@@ -88,6 +88,10 @@ function simulateGuard(
       return authState.isAdmin ? '/admin/dashboard' : '/dashboard'
     }
     if (authState.backendModeEnabled && !authState.isAuthenticated) {
+      if (toPath === '/') {
+        return null
+      }
+
       const allowed = ['/login', '/key-usage', '/setup', '/payment/result']
       const callbackPaths = [
         '/auth/callback',
@@ -137,6 +141,10 @@ function simulateGuard(
     if (authState.isAuthenticated && authState.isAdmin) {
       return null
     }
+    if (toPath === '/') {
+      return null
+    }
+
     const allowed = ['/login', '/key-usage', '/setup', '/payment/result']
     const callbackPaths = [
       '/auth/callback',
@@ -189,9 +197,9 @@ describe('路由守卫逻辑', () => {
       expect(redirect).toBeNull()
     })
 
-    it('访问根路径重定向到 /login', () => {
-      const redirect = simulateGuard('/', { redirect: '/login' }, authState)
-      expect(redirect).toBe('/login')
+    it('访问根路径公开说明页允许通过', () => {
+      const redirect = simulateGuard('/', { requiresAuth: false }, authState)
+      expect(redirect).toBeNull()
     })
 
     it('访问 /login 公开页面允许通过', () => {
@@ -345,7 +353,7 @@ describe('路由守卫逻辑', () => {
   })
 
   describe('Backend Mode', () => {
-    it('unauthenticated: root redirects to /login', () => {
+    it('unauthenticated: root public home page is allowed', () => {
       const authState: MockAuthState = {
         isAuthenticated: false,
         isAdmin: false,
@@ -353,8 +361,8 @@ describe('路由守卫逻辑', () => {
         backendModeEnabled: true,
         hasPendingAuthSession: false,
       }
-      const redirect = simulateGuard('/', { redirect: '/login' }, authState)
-      expect(redirect).toBe('/login')
+      const redirect = simulateGuard('/', { requiresAuth: false }, authState)
+      expect(redirect).toBeNull()
     })
 
     it('unauthenticated: /login is allowed', () => {
