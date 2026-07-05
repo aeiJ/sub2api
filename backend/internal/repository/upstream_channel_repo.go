@@ -207,15 +207,27 @@ func (r *upstreamChannelRepository) UpdateKeySyncedAccountID(ctx context.Context
 }
 
 func (r *upstreamChannelRepository) UpdateKeyTestResult(ctx context.Context, keyID int64, result service.UpstreamTestResult) error {
-	_, err := r.db.ExecContext(ctx,
+	var modelsPayload any
+	if result.Models != nil {
+		payload, err := json.Marshal(nonNilStringSlice(result.Models))
+		if err != nil {
+			return fmt.Errorf("marshal upstream supported models: %w", err)
+		}
+		modelsPayload = string(payload)
+	}
+	var err error
+	_, err = r.db.ExecContext(ctx,
 		`UPDATE upstream_keys
 		 SET last_test_latency_ms = $1,
 		     last_test_status = $2,
 		     last_test_message = $3,
 		     last_tested_at = $4,
+		     supported_models = COALESCE($5::jsonb, supported_models),
+		     last_test_model = $6,
 		     updated_at = NOW()
-		 WHERE id = $5`,
-		nullableInt(result.LatencyMS), result.Status, result.Message, result.TestedAt, keyID,
+		 WHERE id = $7`,
+		nullableInt(result.LatencyMS), result.Status, result.Message, result.TestedAt,
+		modelsPayload, result.TestModel, keyID,
 	)
 	if err != nil {
 		return fmt.Errorf("update upstream key test result: %w", err)
@@ -301,16 +313,18 @@ func (r *upstreamChannelRepository) savePoolTx(ctx context.Context, tx *sql.Tx, 
 			`UPDATE upstream_key_pools
 			 SET name = $1,
 			     group_name = $2,
-			     group_rate_multiplier = $3,
-			     account_rate_multiplier = $4,
-			     load_factor = $5,
-			     concurrency = $6,
-			     status = $7,
-			     synced_group_id = $8,
+			     upstream_group_rate_multiplier = $3,
+			     group_rate_multiplier = $4,
+			     account_rate_multiplier = $5,
+			     load_factor = $6,
+			     concurrency = $7,
+			     status = $8,
+			     synced_group_id = $9,
 			     updated_at = NOW()
-			 WHERE id = $9 AND platform_id = $10`,
-			pool.Name, pool.GroupName, pool.GroupRateMultiplier, pool.AccountRateMultiplier,
-			pool.LoadFactor, pool.Concurrency, pool.Status, pool.SyncedGroupID, pool.ID, pool.PlatformID,
+			 WHERE id = $10 AND platform_id = $11`,
+			pool.Name, pool.GroupName, pool.UpstreamGroupRateMultiplier, pool.GroupRateMultiplier,
+			pool.AccountRateMultiplier, pool.LoadFactor, pool.Concurrency, pool.Status, pool.SyncedGroupID,
+			pool.ID, pool.PlatformID,
 		)
 		if err != nil {
 			if mapped := upstreamUniqueViolationError(err); mapped != nil {
@@ -325,11 +339,11 @@ func (r *upstreamChannelRepository) savePoolTx(ctx context.Context, tx *sql.Tx, 
 	} else {
 		if err := tx.QueryRowContext(ctx,
 			`INSERT INTO upstream_key_pools
-			 (platform_id, name, group_name, group_rate_multiplier, account_rate_multiplier, load_factor, concurrency, status, synced_group_id)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			 (platform_id, name, group_name, upstream_group_rate_multiplier, group_rate_multiplier, account_rate_multiplier, load_factor, concurrency, status, synced_group_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 			 RETURNING id, created_at, updated_at`,
-			pool.PlatformID, pool.Name, pool.GroupName, pool.GroupRateMultiplier, pool.AccountRateMultiplier,
-			pool.LoadFactor, pool.Concurrency, pool.Status, pool.SyncedGroupID,
+			pool.PlatformID, pool.Name, pool.GroupName, pool.UpstreamGroupRateMultiplier, pool.GroupRateMultiplier,
+			pool.AccountRateMultiplier, pool.LoadFactor, pool.Concurrency, pool.Status, pool.SyncedGroupID,
 		).Scan(&pool.ID, &pool.CreatedAt, &pool.UpdatedAt); err != nil {
 			if mapped := upstreamUniqueViolationError(err); mapped != nil {
 				return mapped
@@ -352,6 +366,11 @@ func (r *upstreamChannelRepository) savePoolTx(ctx context.Context, tx *sql.Tx, 
 }
 
 func (r *upstreamChannelRepository) saveKeyTx(ctx context.Context, tx *sql.Tx, key *service.UpstreamKey) error {
+	modelsPayload, err := json.Marshal(nonNilStringSlice(key.SupportedModels))
+	if err != nil {
+		return fmt.Errorf("marshal upstream supported models: %w", err)
+	}
+	modelsJSON := string(modelsPayload)
 	if key.ID > 0 {
 		result, err := tx.ExecContext(ctx,
 			`UPDATE upstream_keys
@@ -364,10 +383,13 @@ func (r *upstreamChannelRepository) saveKeyTx(ctx context.Context, tx *sql.Tx, k
 			     last_test_status = $7,
 			     last_test_message = $8,
 			     last_tested_at = $9,
+			     supported_models = $10::jsonb,
+			     last_test_model = $11,
 			     updated_at = NOW()
-			 WHERE id = $10 AND pool_id = $11`,
+			 WHERE id = $12 AND pool_id = $13`,
 			key.Name, key.EncryptedAPIKey, key.APIKeyFingerprint, key.Status, key.SyncedAccountID,
 			nullableInt(key.LastTestLatencyMS), key.LastTestStatus, key.LastTestMessage, key.LastTestedAt,
+			modelsJSON, key.LastTestModel,
 			key.ID, key.PoolID,
 		)
 		if err != nil {
@@ -382,11 +404,12 @@ func (r *upstreamChannelRepository) saveKeyTx(ctx context.Context, tx *sql.Tx, k
 	return tx.QueryRowContext(ctx,
 		`INSERT INTO upstream_keys
 		 (pool_id, name, encrypted_api_key, api_key_fingerprint, status, synced_account_id,
-		  last_test_latency_ms, last_test_status, last_test_message, last_tested_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		  last_test_latency_ms, last_test_status, last_test_message, last_tested_at, supported_models, last_test_model)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
 		 RETURNING id, created_at, updated_at`,
 		key.PoolID, key.Name, key.EncryptedAPIKey, key.APIKeyFingerprint, key.Status, key.SyncedAccountID,
 		nullableInt(key.LastTestLatencyMS), key.LastTestStatus, key.LastTestMessage, key.LastTestedAt,
+		modelsJSON, key.LastTestModel,
 	).Scan(&key.ID, &key.CreatedAt, &key.UpdatedAt)
 }
 
@@ -501,7 +524,7 @@ func (r *upstreamChannelRepository) loadPlatforms(ctx context.Context, channelID
 
 func (r *upstreamChannelRepository) loadPools(ctx context.Context, platformIDs []int64) ([]service.UpstreamKeyPool, []int64, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, platform_id, name, group_name, group_rate_multiplier, account_rate_multiplier,
+		`SELECT id, platform_id, name, group_name, upstream_group_rate_multiplier, group_rate_multiplier, account_rate_multiplier,
 		        load_factor, concurrency, status, synced_group_id, created_at, updated_at
 		 FROM upstream_key_pools WHERE platform_id = ANY($1) ORDER BY id`,
 		pq.Array(platformIDs),
@@ -517,8 +540,8 @@ func (r *upstreamChannelRepository) loadPools(ctx context.Context, platformIDs [
 		var pool service.UpstreamKeyPool
 		var syncedGroupID sql.NullInt64
 		if err := rows.Scan(
-			&pool.ID, &pool.PlatformID, &pool.Name, &pool.GroupName, &pool.GroupRateMultiplier,
-			&pool.AccountRateMultiplier, &pool.LoadFactor, &pool.Concurrency, &pool.Status,
+			&pool.ID, &pool.PlatformID, &pool.Name, &pool.GroupName, &pool.UpstreamGroupRateMultiplier,
+			&pool.GroupRateMultiplier, &pool.AccountRateMultiplier, &pool.LoadFactor, &pool.Concurrency, &pool.Status,
 			&syncedGroupID, &pool.CreatedAt, &pool.UpdatedAt,
 		); err != nil {
 			return nil, nil, fmt.Errorf("scan upstream key pool: %w", err)
@@ -539,7 +562,8 @@ func (r *upstreamChannelRepository) loadPools(ctx context.Context, platformIDs [
 func (r *upstreamChannelRepository) loadKeys(ctx context.Context, poolIDs []int64) ([]service.UpstreamKey, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, pool_id, name, encrypted_api_key, api_key_fingerprint, status, synced_account_id,
-		        last_test_latency_ms, last_test_status, last_test_message, last_tested_at, created_at, updated_at
+		        last_test_latency_ms, last_test_status, last_test_message, last_tested_at,
+		        supported_models, last_test_model, created_at, updated_at
 		 FROM upstream_keys WHERE pool_id = ANY($1) ORDER BY id`,
 		pq.Array(poolIDs),
 	)
@@ -554,10 +578,11 @@ func (r *upstreamChannelRepository) loadKeys(ctx context.Context, poolIDs []int6
 		var accountID sql.NullInt64
 		var latency sql.NullInt64
 		var testedAt sql.NullTime
+		var supportedModelsRaw []byte
 		if err := rows.Scan(
 			&key.ID, &key.PoolID, &key.Name, &key.EncryptedAPIKey, &key.APIKeyFingerprint,
 			&key.Status, &accountID, &latency, &key.LastTestStatus, &key.LastTestMessage,
-			&testedAt, &key.CreatedAt, &key.UpdatedAt,
+			&testedAt, &supportedModelsRaw, &key.LastTestModel, &key.CreatedAt, &key.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan upstream key: %w", err)
 		}
@@ -570,6 +595,10 @@ func (r *upstreamChannelRepository) loadKeys(ctx context.Context, poolIDs []int6
 		}
 		if testedAt.Valid {
 			key.LastTestedAt = &testedAt.Time
+		}
+		key.SupportedModels = []string{}
+		if len(supportedModelsRaw) > 0 {
+			_ = json.Unmarshal(supportedModelsRaw, &key.SupportedModels)
 		}
 		keys = append(keys, key)
 	}
@@ -617,6 +646,13 @@ func nullableInt(v *int) any {
 		return nil
 	}
 	return *v
+}
+
+func nonNilStringSlice(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 func upstreamUniqueViolationError(err error) error {

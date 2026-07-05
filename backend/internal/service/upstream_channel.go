@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -60,6 +59,12 @@ type UpstreamGroupWriter interface {
 	Update(ctx context.Context, group *Group) error
 }
 
+type UpstreamAccountTester interface {
+	FetchUpstreamSupportedModels(ctx context.Context, account *Account) ([]string, error)
+	SelectDefaultSupportedTestModel(account *Account, models []string) string
+	RunTestBackground(ctx context.Context, accountID int64, modelID string) (*ScheduledTestResult, error)
+}
+
 type UpstreamChannel struct {
 	ID          int64              `json:"id"`
 	Name        string             `json:"name"`
@@ -83,19 +88,20 @@ type UpstreamPlatform struct {
 }
 
 type UpstreamKeyPool struct {
-	ID                    int64         `json:"id"`
-	PlatformID            int64         `json:"platform_id"`
-	Name                  string        `json:"name"`
-	GroupName             string        `json:"group_name"`
-	GroupRateMultiplier   float64       `json:"group_rate_multiplier"`
-	AccountRateMultiplier float64       `json:"account_rate_multiplier"`
-	LoadFactor            int           `json:"load_factor"`
-	Concurrency           int           `json:"concurrency"`
-	Status                string        `json:"status"`
-	SyncedGroupID         *int64        `json:"synced_group_id,omitempty"`
-	Keys                  []UpstreamKey `json:"keys"`
-	CreatedAt             time.Time     `json:"created_at"`
-	UpdatedAt             time.Time     `json:"updated_at"`
+	ID                          int64         `json:"id"`
+	PlatformID                  int64         `json:"platform_id"`
+	Name                        string        `json:"name"`
+	GroupName                   string        `json:"group_name"`
+	UpstreamGroupRateMultiplier float64       `json:"upstream_group_rate_multiplier"`
+	GroupRateMultiplier         float64       `json:"group_rate_multiplier"`
+	AccountRateMultiplier       float64       `json:"account_rate_multiplier"`
+	LoadFactor                  int           `json:"load_factor"`
+	Concurrency                 int           `json:"concurrency"`
+	Status                      string        `json:"status"`
+	SyncedGroupID               *int64        `json:"synced_group_id,omitempty"`
+	Keys                        []UpstreamKey `json:"keys"`
+	CreatedAt                   time.Time     `json:"created_at"`
+	UpdatedAt                   time.Time     `json:"updated_at"`
 }
 
 type UpstreamKey struct {
@@ -104,10 +110,13 @@ type UpstreamKey struct {
 	Name              string     `json:"name"`
 	APIKey            string     `json:"api_key,omitempty"`
 	APIKeyMasked      string     `json:"api_key_masked"`
+	HasAPIKey         bool       `json:"has_api_key"`
 	EncryptedAPIKey   string     `json:"-"`
 	APIKeyFingerprint string     `json:"api_key_fingerprint,omitempty"`
 	Status            string     `json:"status"`
 	SyncedAccountID   *int64     `json:"synced_account_id,omitempty"`
+	SupportedModels   []string   `json:"supported_models"`
+	LastTestModel     string     `json:"last_test_model,omitempty"`
 	LastTestLatencyMS *int       `json:"last_test_latency_ms,omitempty"`
 	LastTestStatus    string     `json:"last_test_status"`
 	LastTestMessage   string     `json:"last_test_message"`
@@ -161,6 +170,8 @@ type UpstreamTestResult struct {
 	Status      string     `json:"status"`
 	LatencyMS   *int       `json:"latency_ms,omitempty"`
 	Message     string     `json:"message"`
+	TestModel   string     `json:"test_model,omitempty"`
+	Models      []string   `json:"models,omitempty"`
 	TestedAt    *time.Time `json:"tested_at,omitempty"`
 	AccountID   *int64     `json:"account_id,omitempty"`
 	Platform    string     `json:"platform"`
@@ -176,7 +187,7 @@ type UpstreamChannelService struct {
 	groupRepo            UpstreamGroupWriter
 	encryptor            SecretEncryptor
 	authCacheInvalidator APIKeyAuthCacheInvalidator
-	httpClient           *http.Client
+	accountTester        UpstreamAccountTester
 }
 
 func NewUpstreamChannelService(
@@ -186,6 +197,7 @@ func NewUpstreamChannelService(
 	groupRepo UpstreamGroupWriter,
 	encryptor SecretEncryptor,
 	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	accountTester *AccountTestService,
 ) *UpstreamChannelService {
 	return &UpstreamChannelService{
 		repo:                 repo,
@@ -194,7 +206,7 @@ func NewUpstreamChannelService(
 		groupRepo:            groupRepo,
 		encryptor:            encryptor,
 		authCacheInvalidator: authCacheInvalidator,
-		httpClient:           &http.Client{Timeout: 10 * time.Second},
+		accountTester:        accountTester,
 	}
 }
 
@@ -358,7 +370,22 @@ func (s *UpstreamChannelService) Sync(ctx context.Context, channelID int64) (*Up
 	return result, nil
 }
 
+type UpstreamTestFilter struct {
+	KeyID  *int64
+	PoolID *int64
+}
+
 func (s *UpstreamChannelService) TestChannel(ctx context.Context, channelID int64) ([]UpstreamTestResult, error) {
+	return s.TestChannelFiltered(ctx, channelID, UpstreamTestFilter{})
+}
+
+func (s *UpstreamChannelService) TestChannelFiltered(ctx context.Context, channelID int64, filter UpstreamTestFilter) ([]UpstreamTestResult, error) {
+	if filter.KeyID != nil && *filter.KeyID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_UPSTREAM_KEY_ID", "invalid upstream key ID")
+	}
+	if filter.PoolID != nil && *filter.PoolID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_UPSTREAM_POOL_ID", "invalid upstream pool ID")
+	}
 	channel, err := s.repo.GetByID(ctx, channelID)
 	if err != nil {
 		return nil, err
@@ -368,8 +395,14 @@ func (s *UpstreamChannelService) TestChannel(ctx context.Context, channelID int6
 		platform := &channel.Platforms[pi]
 		for pki := range platform.KeyPools {
 			pool := &platform.KeyPools[pki]
+			if filter.PoolID != nil && pool.ID != *filter.PoolID {
+				continue
+			}
 			for ki := range pool.Keys {
 				key := &pool.Keys[ki]
+				if filter.KeyID != nil && key.ID != *filter.KeyID {
+					continue
+				}
 				result := s.testKey(ctx, channel, platform, pool, key)
 				if err := s.repo.UpdateKeyTestResult(ctx, key.ID, result); err != nil {
 					return nil, err
@@ -626,48 +659,84 @@ func (s *UpstreamChannelService) testKey(ctx context.Context, channel *UpstreamC
 		ChannelID:   channel.ID,
 		ChannelName: channel.Name,
 	}
-	apiKey, err := s.decryptKey(key.EncryptedAPIKey)
-	if err != nil || strings.TrimSpace(apiKey) == "" {
+	if s.accountRepo == nil || s.accountTester == nil {
 		result.Status = "failed"
-		result.Message = "missing or undecryptable api key"
+		result.Message = "account test service is not configured"
 		return result
 	}
-	endpoint := upstreamModelsEndpoint(platform.BaseURL, result.Platform)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	accountID, accountWarnings := s.resolveSyncedAccountID(ctx, key)
+	if accountID == nil {
+		result.Status = "failed"
+		result.Message = "please sync this upstream key to an account before testing"
+		if len(accountWarnings) > 0 {
+			result.Message = strings.Join(accountWarnings, "; ")
+		}
+		return result
+	}
+	result.AccountID = accountID
+	account, err := s.accountRepo.GetByID(ctx, *accountID)
 	if err != nil {
 		result.Status = "failed"
 		result.Message = err.Error()
 		return result
 	}
-	switch result.Platform {
-	case PlatformAnthropic, PlatformAntigravity:
-		req.Header.Set("x-api-key", apiKey)
-		req.Header.Set("anthropic-version", "2023-06-01")
-	default:
-		req.Header.Set("Authorization", "Bearer "+apiKey)
+	models, err := s.accountTester.FetchUpstreamSupportedModels(ctx, account)
+	if err != nil {
+		result.Status = "failed"
+		result.Message = safeUpstreamModelSyncMessage(err)
+		return result
 	}
-	start := time.Now()
-	resp, err := s.httpClient.Do(req)
-	latency := int(time.Since(start).Milliseconds())
+	result.Models = models
+	key.SupportedModels = append([]string(nil), models...)
+	testModel := s.accountTester.SelectDefaultSupportedTestModel(account, models)
+	if testModel == "" {
+		result.Status = "failed"
+		result.Message = "upstream returned no supported models"
+		return result
+	}
+	result.TestModel = testModel
+
+	testResult, err := s.accountTester.RunTestBackground(ctx, account.ID, testModel)
+	if err != nil {
+		result.Status = "failed"
+		result.Message = err.Error()
+		return result
+	}
+	latency := int(testResult.LatencyMs)
 	result.LatencyMS = &latency
-	if err != nil {
-		result.Status = "failed"
-		result.Message = err.Error()
+	if testResult.Status == "success" {
+		result.Status = "operational"
+		result.Message = fmt.Sprintf("account test succeeded using %s", testModel)
 		return result
 	}
-	defer func() { _ = resp.Body.Close() }()
-	switch {
-	case resp.StatusCode >= 200 && resp.StatusCode < 400:
-		result.Status = "operational"
-		result.Message = resp.Status
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+	result.Status = "failed"
+	if isAuthFailureMessage(testResult.ErrorMessage) {
 		result.Status = "auth_error"
-		result.Message = resp.Status
-	default:
-		result.Status = "failed"
-		result.Message = resp.Status
+	}
+	if strings.TrimSpace(testResult.ErrorMessage) != "" {
+		result.Message = fmt.Sprintf("%s using %s", testResult.ErrorMessage, testModel)
+	} else {
+		result.Message = fmt.Sprintf("account test failed using %s", testModel)
 	}
 	return result
+}
+
+func safeUpstreamModelSyncMessage(err error) string {
+	var syncErr *UpstreamModelSyncError
+	if errors.As(err, &syncErr) {
+		return syncErr.SafeMessage()
+	}
+	return err.Error()
+}
+
+func isAuthFailureMessage(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(lower, "unauthorized") ||
+		strings.Contains(lower, "forbidden") ||
+		strings.Contains(lower, "invalid api key") ||
+		strings.Contains(lower, "authentication") ||
+		strings.Contains(lower, "401") ||
+		strings.Contains(lower, "403")
 }
 
 func (s *UpstreamChannelService) resolveSyncedGroupID(ctx context.Context, pool *UpstreamKeyPool) (*int64, []string) {
@@ -682,6 +751,9 @@ func (s *UpstreamChannelService) resolveSyncedGroupID(ctx context.Context, pool 
 }
 
 func (s *UpstreamChannelService) resolveSyncedAccountID(ctx context.Context, key *UpstreamKey) (*int64, []string) {
+	if s.accountRepo == nil {
+		return nil, []string{"account repository is not configured"}
+	}
 	if key.SyncedAccountID != nil && *key.SyncedAccountID > 0 {
 		if _, err := s.accountRepo.GetByID(ctx, *key.SyncedAccountID); err == nil {
 			id := *key.SyncedAccountID
@@ -765,6 +837,9 @@ func (s *UpstreamChannelService) normalizeChannel(channel *UpstreamChannel, exis
 			if pool.GroupName == "" {
 				pool.GroupName = fmt.Sprintf("%s-%s", channel.Name, platform.Provider)
 			}
+			if pool.UpstreamGroupRateMultiplier <= 0 {
+				pool.UpstreamGroupRateMultiplier = 1
+			}
 			if pool.GroupRateMultiplier <= 0 {
 				pool.GroupRateMultiplier = 1
 			}
@@ -843,6 +918,12 @@ func (s *UpstreamChannelService) normalizeKeySecret(key *UpstreamKey, existing *
 		if key.LastTestMessage == "" {
 			key.LastTestMessage = existing.LastTestMessage
 		}
+		if key.LastTestModel == "" {
+			key.LastTestModel = existing.LastTestModel
+		}
+		if key.SupportedModels == nil {
+			key.SupportedModels = append([]string(nil), existing.SupportedModels...)
+		}
 		if key.LastTestedAt == nil {
 			key.LastTestedAt = existing.LastTestedAt
 		}
@@ -862,16 +943,16 @@ func (s *UpstreamChannelService) hydrateMaskedKeys(channel *UpstreamChannel) {
 				key := &channel.Platforms[pi].KeyPools[pki].Keys[ki]
 				key.APIKey = ""
 				if key.EncryptedAPIKey == "" {
+					key.HasAPIKey = false
 					key.APIKeyMasked = ""
 					continue
 				}
+				key.HasAPIKey = true
 				if plain, err := s.decryptKey(key.EncryptedAPIKey); err == nil {
 					key.APIKeyMasked = maskSecret(plain)
 					if key.APIKeyFingerprint == "" {
 						key.APIKeyFingerprint = fingerprintSecret(plain)
 					}
-				} else if key.APIKeyMasked == "" {
-					key.APIKeyMasked = "decrypt failed"
 				}
 			}
 		}
@@ -947,9 +1028,9 @@ func isSupportedUpstreamProvider(provider string) bool {
 func defaultProviderDisplayName(provider string) string {
 	switch provider {
 	case PlatformAnthropic:
-		return "Claude"
+		return "Anthropic"
 	case PlatformOpenAI:
-		return "GPT"
+		return "OpenAI"
 	case PlatformGemini:
 		return "Gemini"
 	case PlatformAntigravity:

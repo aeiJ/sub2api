@@ -18,7 +18,7 @@ import (
 func TestUpstreamChannelHandlerCreateMasksAPIKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := newAdminUpstreamFakeRepo()
-	svc := service.NewUpstreamChannelService(repo, nil, nil, nil, adminUpstreamFakeEncryptor{}, nil)
+	svc := service.NewUpstreamChannelService(repo, nil, nil, nil, adminUpstreamFakeEncryptor{}, nil, nil)
 	handler := NewUpstreamChannelHandler(svc)
 
 	router := gin.New()
@@ -33,6 +33,7 @@ func TestUpstreamChannelHandlerCreateMasksAPIKey(t *testing.T) {
 			"key_pools":[{
 				"name":"GPT pool",
 				"group_name":"GPT group",
+				"upstream_group_rate_multiplier":1.75,
 				"group_rate_multiplier":1,
 				"account_rate_multiplier":1,
 				"load_factor":1,
@@ -53,12 +54,13 @@ func TestUpstreamChannelHandlerCreateMasksAPIKey(t *testing.T) {
 	stored := repo.channels[1].Platforms[0].KeyPools[0].Keys[0]
 	require.Equal(t, "enc:sk-secret-123456", stored.EncryptedAPIKey)
 	require.Empty(t, stored.APIKey)
+	require.Equal(t, 1.75, repo.channels[1].Platforms[0].KeyPools[0].UpstreamGroupRateMultiplier)
 }
 
 func TestUpstreamChannelHandlerUpdateStatusOnlyPreservesChannelConfig(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := newAdminUpstreamFakeRepo()
-	svc := service.NewUpstreamChannelService(repo, nil, nil, nil, adminUpstreamFakeEncryptor{}, nil)
+	svc := service.NewUpstreamChannelService(repo, nil, nil, nil, adminUpstreamFakeEncryptor{}, nil, nil)
 	handler := NewUpstreamChannelHandler(svc)
 
 	router := gin.New()
@@ -107,6 +109,74 @@ func TestUpstreamChannelHandlerUpdateStatusOnlyPreservesChannelConfig(t *testing
 	require.Len(t, stored.Platforms[0].KeyPools[0].Keys, 1)
 }
 
+func TestUpstreamChannelHandlerTestAcceptsFilteredBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := newAdminUpstreamFakeRepo()
+	svc := service.NewUpstreamChannelService(repo, nil, nil, nil, adminUpstreamFakeEncryptor{}, nil, nil)
+	handler := NewUpstreamChannelHandler(svc)
+
+	router := gin.New()
+	router.POST("/upstreams/:id/test", handler.Test)
+
+	repo.channels[1] = &service.UpstreamChannel{
+		ID:     1,
+		Name:   "Prod upstream",
+		Status: service.StatusActive,
+		Platforms: []service.UpstreamPlatform{{
+			ID:       2,
+			Provider: service.PlatformOpenAI,
+			KeyPools: []service.UpstreamKeyPool{
+				{
+					ID:        3,
+					Name:      "pool-a",
+					GroupName: "group-a",
+					Keys: []service.UpstreamKey{
+						{ID: 4, Name: "a-1", Status: service.StatusActive},
+						{ID: 5, Name: "a-2", Status: service.StatusActive},
+					},
+				},
+				{
+					ID:        6,
+					Name:      "pool-b",
+					GroupName: "group-b",
+					Keys:      []service.UpstreamKey{{ID: 7, Name: "b-1", Status: service.StatusActive}},
+				},
+			},
+		}},
+	}
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/upstreams/1/test", strings.NewReader(`{"pool_id":3,"key_id":5}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `"key_id":5`)
+	require.NotContains(t, w.Body.String(), `"key_id":4`)
+	require.NotContains(t, w.Body.String(), `"key_id":7`)
+	require.Equal(t, []int64{5}, repo.testedKeyIDs)
+}
+
+func TestUpstreamChannelHandlerTestRejectsMalformedFilterBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := newAdminUpstreamFakeRepo()
+	svc := service.NewUpstreamChannelService(repo, nil, nil, nil, adminUpstreamFakeEncryptor{}, nil, nil)
+	handler := NewUpstreamChannelHandler(svc)
+
+	router := gin.New()
+	router.POST("/upstreams/:id/test", handler.Test)
+
+	repo.channels[1] = &service.UpstreamChannel{ID: 1, Name: "Prod upstream"}
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/upstreams/1/test", strings.NewReader(`{"key_id":`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Empty(t, repo.testedKeyIDs)
+}
+
 type adminUpstreamFakeEncryptor struct{}
 
 func (adminUpstreamFakeEncryptor) Encrypt(plaintext string) (string, error) {
@@ -121,8 +191,9 @@ func (adminUpstreamFakeEncryptor) Decrypt(ciphertext string) (string, error) {
 }
 
 type adminUpstreamFakeRepo struct {
-	nextID   int64
-	channels map[int64]*service.UpstreamChannel
+	nextID       int64
+	channels     map[int64]*service.UpstreamChannel
+	testedKeyIDs []int64
 }
 
 func newAdminUpstreamFakeRepo() *adminUpstreamFakeRepo {
@@ -172,8 +243,25 @@ func (r *adminUpstreamFakeRepo) UpdateKeySyncedAccountID(context.Context, int64,
 	return nil
 }
 
-func (r *adminUpstreamFakeRepo) UpdateKeyTestResult(context.Context, int64, service.UpstreamTestResult) error {
-	return nil
+func (r *adminUpstreamFakeRepo) UpdateKeyTestResult(_ context.Context, keyID int64, result service.UpstreamTestResult) error {
+	r.testedKeyIDs = append(r.testedKeyIDs, keyID)
+	for _, channel := range r.channels {
+		for pi := range channel.Platforms {
+			for pki := range channel.Platforms[pi].KeyPools {
+				for ki := range channel.Platforms[pi].KeyPools[pki].Keys {
+					key := &channel.Platforms[pi].KeyPools[pki].Keys[ki]
+					if key.ID == keyID {
+						key.LastTestLatencyMS = result.LatencyMS
+						key.LastTestStatus = result.Status
+						key.LastTestMessage = result.Message
+						key.LastTestedAt = result.TestedAt
+						return nil
+					}
+				}
+			}
+		}
+	}
+	return service.ErrUpstreamChannelNotFound
 }
 
 func (r *adminUpstreamFakeRepo) RecordSyncEvent(context.Context, int64, string, map[string]int) error {

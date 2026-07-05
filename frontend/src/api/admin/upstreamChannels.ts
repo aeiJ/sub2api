@@ -9,7 +9,7 @@ import type { PaginatedResponse } from '@/types'
 const BASE_PATH = '/admin/upstream-channels'
 
 export type UpstreamResourceStatus = 'active' | 'disabled' | 'inactive' | (string & {})
-export type UpstreamProvider = 'anthropic' | 'openai' | (string & {})
+export type UpstreamProvider = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | (string & {})
 
 export interface UpstreamChannel {
   id: number
@@ -37,6 +37,7 @@ export interface UpstreamKeyPool {
   name: string
   group_name: string
   group_rate_multiplier: number
+  upstream_group_rate_multiplier: number
   account_rate_multiplier: number
   load_factor: number
   concurrency: number
@@ -51,8 +52,11 @@ export interface UpstreamKey {
   name: string
   api_key?: string
   api_key_masked: string
+  has_api_key: boolean
   status: UpstreamResourceStatus
   synced_account_id: number | null
+  supported_models: string[]
+  last_test_model?: string | null
   last_test_latency_ms: number | null
   last_test_status: string | null
   last_test_message: string | null
@@ -71,6 +75,7 @@ export interface UpstreamKeyPoolPayload {
   name: string
   group_name: string
   group_rate_multiplier: number
+  upstream_group_rate_multiplier: number
   account_rate_multiplier: number
   load_factor: number
   concurrency: number
@@ -155,6 +160,8 @@ export interface UpstreamTestResult {
   status: string
   latency_ms?: number | null
   message?: string
+  test_model?: string
+  models?: string[]
   tested_at?: string
 }
 

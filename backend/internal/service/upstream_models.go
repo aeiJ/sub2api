@@ -12,6 +12,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
 
 const upstreamModelsBodyLimit int64 = 8 << 20
@@ -125,6 +126,76 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 	}
 
 	return models, nil
+}
+
+// SelectDefaultSupportedTestModel picks a safe default from a live upstream model list
+// for account test flows that need to run without an operator choosing a model.
+func (s *AccountTestService) SelectDefaultSupportedTestModel(account *Account, models []string) string {
+	if len(models) == 0 {
+		return ""
+	}
+	contains := func(candidate string) string {
+		for _, model := range models {
+			if strings.EqualFold(strings.TrimSpace(model), candidate) {
+				return strings.TrimSpace(model)
+			}
+		}
+		return ""
+	}
+	firstTextModel := func() string {
+		for _, model := range models {
+			trimmed := strings.TrimSpace(model)
+			lower := strings.ToLower(trimmed)
+			if trimmed == "" {
+				continue
+			}
+			if strings.Contains(lower, "embedding") ||
+				strings.Contains(lower, "image") ||
+				strings.Contains(lower, "audio") ||
+				strings.Contains(lower, "video") {
+				continue
+			}
+			return trimmed
+		}
+		return strings.TrimSpace(models[0])
+	}
+	if account == nil {
+		return firstTextModel()
+	}
+	switch {
+	case account.IsAnthropic():
+		if model := contains(claude.DefaultTestModel); model != "" {
+			return model
+		}
+		for _, model := range models {
+			trimmed := strings.TrimSpace(model)
+			if strings.Contains(strings.ToLower(trimmed), "sonnet") {
+				return trimmed
+			}
+		}
+	case account.IsOpenAI():
+		if model := contains(openai.DefaultTestModel); model != "" {
+			return model
+		}
+	case account.IsGemini():
+		if model := contains(geminicli.DefaultTestModel); model != "" {
+			return model
+		}
+		for _, model := range models {
+			trimmed := strings.TrimPrefix(strings.TrimSpace(model), "models/")
+			if strings.EqualFold(trimmed, geminicli.DefaultTestModel) {
+				return strings.TrimSpace(model)
+			}
+		}
+	case account.Platform == PlatformAntigravity:
+		if model := contains(claude.DefaultTestModel); model != "" {
+			return model
+		}
+		if model := contains(geminicli.DefaultTestModel); model != "" {
+			return model
+		}
+	}
+	return firstTextModel()
 }
 
 func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {

@@ -13,7 +13,7 @@ import (
 
 func TestUpstreamChannelServiceCreateEncryptsAndMasksAPIKeys(t *testing.T) {
 	repo := newFakeUpstreamRepo()
-	svc := NewUpstreamChannelService(repo, newFakeUpstreamAdmin(newFakeUpstreamGroups()), nil, nil, fakeUpstreamEncryptor{}, nil)
+	svc := NewUpstreamChannelService(repo, newFakeUpstreamAdmin(newFakeUpstreamGroups()), nil, nil, fakeUpstreamEncryptor{}, nil, nil)
 
 	created, err := svc.Create(context.Background(), &UpstreamChannel{
 		Name:   "Prod upstream",
@@ -42,11 +42,44 @@ func TestUpstreamChannelServiceCreateEncryptsAndMasksAPIKeys(t *testing.T) {
 	require.Equal(t, "enc:sk-test-123456", storedKey.EncryptedAPIKey)
 	require.NotEmpty(t, storedKey.APIKeyFingerprint)
 	require.Equal(t, "sk-t...3456", created.Platforms[0].KeyPools[0].Keys[0].APIKeyMasked)
+	require.True(t, created.Platforms[0].KeyPools[0].Keys[0].HasAPIKey)
+}
+
+func TestUpstreamChannelServiceGetByIDDoesNotExposeDecryptFailure(t *testing.T) {
+	repo := newFakeUpstreamRepo()
+	svc := NewUpstreamChannelService(repo, nil, nil, nil, fakeUpstreamEncryptor{}, nil, nil)
+
+	created, err := svc.Create(context.Background(), &UpstreamChannel{
+		Name: "Broken key upstream",
+		Platforms: []UpstreamPlatform{{
+			Provider: PlatformOpenAI,
+			KeyPools: []UpstreamKeyPool{{
+				Name:      "OpenAI pool",
+				GroupName: "OpenAI group",
+				Keys: []UpstreamKey{{
+					Name:   "group key",
+					APIKey: "sk-test-123456",
+				}},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+
+	storedKey := &repo.channels[created.ID].Platforms[0].KeyPools[0].Keys[0]
+	storedKey.EncryptedAPIKey = "not-current-ciphertext"
+	storedKey.APIKeyMasked = ""
+
+	reloaded, err := svc.GetByID(context.Background(), created.ID)
+	require.NoError(t, err)
+	key := reloaded.Platforms[0].KeyPools[0].Keys[0]
+	require.True(t, key.HasAPIKey)
+	require.Empty(t, key.APIKey)
+	require.Empty(t, key.APIKeyMasked)
 }
 
 func TestUpstreamChannelServiceCreateGeneratesUniqueDefaultPoolNames(t *testing.T) {
 	repo := newFakeUpstreamRepo()
-	svc := NewUpstreamChannelService(repo, nil, nil, nil, fakeUpstreamEncryptor{}, nil)
+	svc := NewUpstreamChannelService(repo, nil, nil, nil, fakeUpstreamEncryptor{}, nil, nil)
 
 	created, err := svc.Create(context.Background(), &UpstreamChannel{
 		Name: "Default pools",
@@ -66,8 +99,52 @@ func TestUpstreamChannelServiceCreateGeneratesUniqueDefaultPoolNames(t *testing.
 	require.Equal(t, "Claude pool 2", created.Platforms[0].KeyPools[1].Name)
 }
 
+func TestUpstreamChannelServiceCreatePreservesUpstreamGroupRateMultiplier(t *testing.T) {
+	repo := newFakeUpstreamRepo()
+	svc := NewUpstreamChannelService(repo, nil, nil, nil, fakeUpstreamEncryptor{}, nil, nil)
+
+	created, err := svc.Create(context.Background(), &UpstreamChannel{
+		Name: "Multiplier upstream",
+		Platforms: []UpstreamPlatform{{
+			Provider: PlatformOpenAI,
+			KeyPools: []UpstreamKeyPool{{
+				Name:                        "GPT pool",
+				GroupName:                   "GPT group",
+				UpstreamGroupRateMultiplier: 1.75,
+				GroupRateMultiplier:         1.25,
+				AccountRateMultiplier:       0.8,
+			}},
+		}},
+	})
+
+	require.NoError(t, err)
+	pool := created.Platforms[0].KeyPools[0]
+	require.Equal(t, 1.75, pool.UpstreamGroupRateMultiplier)
+	require.Equal(t, 1.25, pool.GroupRateMultiplier)
+	require.Equal(t, 0.8, pool.AccountRateMultiplier)
+}
+
+func TestUpstreamChannelServiceCreateDefaultsUpstreamGroupRateMultiplier(t *testing.T) {
+	repo := newFakeUpstreamRepo()
+	svc := NewUpstreamChannelService(repo, nil, nil, nil, fakeUpstreamEncryptor{}, nil, nil)
+
+	created, err := svc.Create(context.Background(), &UpstreamChannel{
+		Name: "Default multiplier upstream",
+		Platforms: []UpstreamPlatform{{
+			Provider: PlatformOpenAI,
+			KeyPools: []UpstreamKeyPool{{
+				Name:      "GPT pool",
+				GroupName: "GPT group",
+			}},
+		}},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1.0, created.Platforms[0].KeyPools[0].UpstreamGroupRateMultiplier)
+}
+
 func TestUpstreamChannelServiceCreateRejectsDuplicatePlatformsAndPools(t *testing.T) {
-	svc := NewUpstreamChannelService(newFakeUpstreamRepo(), nil, nil, nil, fakeUpstreamEncryptor{}, nil)
+	svc := NewUpstreamChannelService(newFakeUpstreamRepo(), nil, nil, nil, fakeUpstreamEncryptor{}, nil, nil)
 
 	_, err := svc.Create(context.Background(), &UpstreamChannel{
 		Name: "Duplicate providers",
@@ -98,7 +175,7 @@ func TestUpstreamChannelServiceSyncIsIdempotent(t *testing.T) {
 	repo := newFakeUpstreamRepo()
 	groups := newFakeUpstreamGroups()
 	admin := newFakeUpstreamAdmin(groups)
-	svc := NewUpstreamChannelService(repo, admin, admin, groups, fakeUpstreamEncryptor{}, nil)
+	svc := NewUpstreamChannelService(repo, admin, admin, groups, fakeUpstreamEncryptor{}, nil, nil)
 
 	channel, err := svc.Create(ctx, &UpstreamChannel{
 		Name:   "Mixed upstream",
@@ -164,7 +241,7 @@ func TestUpstreamChannelServiceSyncUsesExistingAccountCredentialsWhenUpstreamKey
 	repo := newFakeUpstreamRepo()
 	groups := newFakeUpstreamGroups()
 	admin := newFakeUpstreamAdmin(groups)
-	svc := NewUpstreamChannelService(repo, admin, admin, groups, fakeUpstreamEncryptor{}, nil)
+	svc := NewUpstreamChannelService(repo, admin, admin, groups, fakeUpstreamEncryptor{}, nil, nil)
 
 	channel, err := svc.Create(ctx, &UpstreamChannel{
 		Name:   "Existing account upstream",
@@ -223,7 +300,7 @@ func TestUpstreamChannelServiceSyncUsesExistingAccountCredentialsWhenUpstreamKey
 func TestUpstreamChannelServiceUpdateStatusPreservesNestedConfig(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeUpstreamRepo()
-	svc := NewUpstreamChannelService(repo, nil, nil, nil, fakeUpstreamEncryptor{}, nil)
+	svc := NewUpstreamChannelService(repo, nil, nil, nil, fakeUpstreamEncryptor{}, nil, nil)
 
 	channel, err := svc.Create(ctx, &UpstreamChannel{
 		Name:   "Managed upstream",
@@ -259,6 +336,145 @@ func TestUpstreamChannelServiceUpdateStatusPreservesNestedConfig(t *testing.T) {
 	require.Equal(t, "sk-t...3456", updated.Platforms[0].KeyPools[0].Keys[0].APIKeyMasked)
 }
 
+func TestUpstreamChannelServiceTestChannelFilteredByPoolAndKey(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeUpstreamRepo()
+	groups := newFakeUpstreamGroups()
+	admin := newFakeUpstreamAdmin(groups)
+	tester := &fakeUpstreamAccountTester{
+		models: []string{"gpt-test-model", "gpt-image-1"},
+		result: &ScheduledTestResult{
+			Status:    "success",
+			LatencyMs: 42,
+		},
+	}
+	svc := NewUpstreamChannelService(repo, admin, admin, groups, fakeUpstreamEncryptor{}, nil, nil)
+	svc.accountTester = tester
+
+	channel, err := svc.Create(ctx, &UpstreamChannel{
+		Name: "Filtered upstream",
+		Platforms: []UpstreamPlatform{{
+			Provider: PlatformOpenAI,
+			BaseURL:  "https://api.openai.com/v1",
+			KeyPools: []UpstreamKeyPool{
+				{
+					Name:      "Pool A",
+					GroupName: "Group A",
+					Keys: []UpstreamKey{
+						{Name: "a-1", APIKey: "sk-a-1"},
+						{Name: "a-2", APIKey: "sk-a-2"},
+					},
+				},
+				{
+					Name:      "Pool B",
+					GroupName: "Group B",
+					Keys:      []UpstreamKey{{Name: "b-1", APIKey: "sk-b-1"}},
+				},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	_, err = svc.Sync(ctx, channel.ID)
+	require.NoError(t, err)
+	channel, err = repo.GetByID(ctx, channel.ID)
+	require.NoError(t, err)
+
+	poolID := channel.Platforms[0].KeyPools[0].ID
+	keyID := channel.Platforms[0].KeyPools[0].Keys[1].ID
+	results, err := svc.TestChannelFiltered(ctx, channel.ID, UpstreamTestFilter{PoolID: &poolID, KeyID: &keyID})
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, keyID, results[0].KeyID)
+	require.Equal(t, "a-2", results[0].KeyName)
+	require.Equal(t, "gpt-test-model", results[0].TestModel)
+	require.Equal(t, []string{"gpt-test-model", "gpt-image-1"}, results[0].Models)
+	require.Equal(t, "operational", results[0].Status)
+	require.Equal(t, 42, *results[0].LatencyMS)
+	require.Equal(t, []int64{keyID}, repo.testedKeyIDs)
+	require.Len(t, tester.fetchAccountIDs, 1)
+	require.Len(t, tester.testAccountIDs, 1)
+
+	reloaded, err := repo.GetByID(ctx, channel.ID)
+	require.NoError(t, err)
+	storedKey := reloaded.Platforms[0].KeyPools[0].Keys[1]
+	require.Equal(t, []string{"gpt-test-model", "gpt-image-1"}, storedKey.SupportedModels)
+	require.Equal(t, "gpt-test-model", storedKey.LastTestModel)
+}
+
+func TestUpstreamChannelServiceTestChannelRequiresSyncedAccount(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeUpstreamRepo()
+	groups := newFakeUpstreamGroups()
+	admin := newFakeUpstreamAdmin(groups)
+	tester := &fakeUpstreamAccountTester{models: []string{"gpt-test-model"}}
+	svc := NewUpstreamChannelService(repo, admin, admin, groups, fakeUpstreamEncryptor{}, nil, nil)
+	svc.accountTester = tester
+
+	channel, err := svc.Create(ctx, &UpstreamChannel{
+		Name: "Unsynced upstream",
+		Platforms: []UpstreamPlatform{{
+			Provider: PlatformOpenAI,
+			KeyPools: []UpstreamKeyPool{{
+				Name:      "Pool A",
+				GroupName: "Group A",
+				Keys:      []UpstreamKey{{Name: "a-1", APIKey: "sk-a-1"}},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+
+	results, err := svc.TestChannel(ctx, channel.ID)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "failed", results[0].Status)
+	require.Contains(t, results[0].Message, "sync")
+	require.Empty(t, tester.fetchAccountIDs)
+}
+
+func TestUpstreamChannelServiceTestChannelPreservesSupportedModelsWhenModelSyncFails(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeUpstreamRepo()
+	groups := newFakeUpstreamGroups()
+	admin := newFakeUpstreamAdmin(groups)
+	tester := &fakeUpstreamAccountTester{
+		models: []string{"gpt-test-model", "gpt-image-1"},
+		result: &ScheduledTestResult{Status: "success", LatencyMs: 7},
+	}
+	svc := NewUpstreamChannelService(repo, admin, admin, groups, fakeUpstreamEncryptor{}, nil, nil)
+	svc.accountTester = tester
+
+	channel, err := svc.Create(ctx, &UpstreamChannel{
+		Name: "Model cache upstream",
+		Platforms: []UpstreamPlatform{{
+			Provider: PlatformOpenAI,
+			KeyPools: []UpstreamKeyPool{{
+				Name:      "Pool A",
+				GroupName: "Group A",
+				Keys:      []UpstreamKey{{Name: "a-1", APIKey: "sk-a-1"}},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+	_, err = svc.Sync(ctx, channel.ID)
+	require.NoError(t, err)
+
+	results, err := svc.TestChannel(ctx, channel.ID)
+	require.NoError(t, err)
+	require.Equal(t, "operational", results[0].Status)
+
+	tester.fetchErr = fmt.Errorf("model sync temporarily unavailable")
+	results, err = svc.TestChannel(ctx, channel.ID)
+	require.NoError(t, err)
+	require.Equal(t, "failed", results[0].Status)
+
+	reloaded, err := repo.GetByID(ctx, channel.ID)
+	require.NoError(t, err)
+	storedKey := reloaded.Platforms[0].KeyPools[0].Keys[0]
+	require.Equal(t, []string{"gpt-test-model", "gpt-image-1"}, storedKey.SupportedModels)
+	require.Equal(t, "", storedKey.LastTestModel)
+}
+
 type fakeUpstreamEncryptor struct{}
 
 func (fakeUpstreamEncryptor) Encrypt(plaintext string) (string, error) {
@@ -271,12 +487,51 @@ func (fakeUpstreamEncryptor) Decrypt(ciphertext string) (string, error) {
 	return "", fmt.Errorf("invalid ciphertext")
 }
 
+type fakeUpstreamAccountTester struct {
+	models          []string
+	result          *ScheduledTestResult
+	fetchErr        error
+	testErr         error
+	fetchAccountIDs []int64
+	testAccountIDs  []int64
+	testModels      []string
+}
+
+func (t *fakeUpstreamAccountTester) FetchUpstreamSupportedModels(_ context.Context, account *Account) ([]string, error) {
+	t.fetchAccountIDs = append(t.fetchAccountIDs, account.ID)
+	if t.fetchErr != nil {
+		return nil, t.fetchErr
+	}
+	return append([]string(nil), t.models...), nil
+}
+
+func (t *fakeUpstreamAccountTester) SelectDefaultSupportedTestModel(_ *Account, models []string) string {
+	if len(models) == 0 {
+		return ""
+	}
+	return models[0]
+}
+
+func (t *fakeUpstreamAccountTester) RunTestBackground(_ context.Context, accountID int64, modelID string) (*ScheduledTestResult, error) {
+	t.testAccountIDs = append(t.testAccountIDs, accountID)
+	t.testModels = append(t.testModels, modelID)
+	if t.testErr != nil {
+		return nil, t.testErr
+	}
+	if t.result != nil {
+		cp := *t.result
+		return &cp, nil
+	}
+	return &ScheduledTestResult{Status: "success", LatencyMs: 1}, nil
+}
+
 type fakeUpstreamRepo struct {
 	nextChannelID  int64
 	nextPlatformID int64
 	nextPoolID     int64
 	nextKeyID      int64
 	channels       map[int64]*UpstreamChannel
+	testedKeyIDs   []int64
 }
 
 func newFakeUpstreamRepo() *fakeUpstreamRepo {
@@ -360,8 +615,29 @@ func (r *fakeUpstreamRepo) UpdateKeySyncedAccountID(_ context.Context, keyID int
 	return ErrUpstreamChannelNotFound
 }
 
-func (r *fakeUpstreamRepo) UpdateKeyTestResult(_ context.Context, _ int64, _ UpstreamTestResult) error {
-	return nil
+func (r *fakeUpstreamRepo) UpdateKeyTestResult(_ context.Context, keyID int64, result UpstreamTestResult) error {
+	r.testedKeyIDs = append(r.testedKeyIDs, keyID)
+	for _, channel := range r.channels {
+		for pi := range channel.Platforms {
+			for pki := range channel.Platforms[pi].KeyPools {
+				for ki := range channel.Platforms[pi].KeyPools[pki].Keys {
+					key := &channel.Platforms[pi].KeyPools[pki].Keys[ki]
+					if key.ID == keyID {
+						key.LastTestLatencyMS = result.LatencyMS
+						key.LastTestStatus = result.Status
+						key.LastTestMessage = result.Message
+						key.LastTestModel = result.TestModel
+						if result.Models != nil {
+							key.SupportedModels = append([]string(nil), result.Models...)
+						}
+						key.LastTestedAt = result.TestedAt
+						return nil
+					}
+				}
+			}
+		}
+	}
+	return ErrUpstreamChannelNotFound
 }
 
 func (r *fakeUpstreamRepo) RecordSyncEvent(_ context.Context, _ int64, _ string, _ map[string]int) error {

@@ -54,6 +54,7 @@ describe('admin upstreamChannels API', () => {
               name: 'GPT pool',
               group_name: 'GPT group',
               group_rate_multiplier: 1,
+              upstream_group_rate_multiplier: 1,
               account_rate_multiplier: 1,
               load_factor: 1,
               concurrency: 2,

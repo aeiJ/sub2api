@@ -65,25 +65,105 @@
             </div>
           </template>
 
-          <template #cell-platforms="{ row }">
-            <div class="flex min-w-48 flex-wrap gap-1.5">
-              <span
-                v-for="platform in row.platforms || []"
-                :key="platform.id"
-                class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium"
-                :class="providerBadgeClass(platform.provider)"
+          <template #cell-details="{ row }">
+            <div class="w-full min-w-0 max-w-full overflow-hidden">
+              <div class="upstream-detail-grid upstream-detail-head">
+                <span>{{ t('admin.upstreamChannels.list.platform') }}</span>
+                <span>{{ t('admin.upstreamChannels.list.group') }}</span>
+                <span>{{ t('admin.upstreamChannels.list.multipliers') }}</span>
+                <span>{{ t('admin.upstreamChannels.list.account') }}</span>
+                <span>{{ t('admin.upstreamChannels.list.supportedModels') }}</span>
+                <span>{{ t('admin.upstreamChannels.list.capacity') }}</span>
+                <span>{{ t('admin.upstreamChannels.list.lastTest') }}</span>
+                <span class="text-right">{{ t('admin.upstreamChannels.list.speedTest') }}</span>
+              </div>
+              <div v-if="channelDetailRows(row).length === 0" class="px-3 py-4 text-sm text-gray-400">
+                -
+              </div>
+              <div
+                v-for="detail in channelDetailRows(row)"
+                :key="detailRowKey(detail)"
+                class="upstream-detail-grid upstream-detail-row"
               >
-                {{ providerLabel(platform.provider) }}
-                <span class="text-[10px] opacity-80">{{ platform.key_pools?.length || 0 }}</span>
-              </span>
-              <span v-if="!row.platforms?.length" class="text-sm text-gray-400">-</span>
+                <div class="min-w-0">
+                  <span
+                    class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium"
+                    :class="providerBadgeClass(detail.platform.provider)"
+                  >
+                    {{ providerLabel(detail.platform.provider) }}
+                  </span>
+                  <div class="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
+                    {{ detail.platform.display_name || '-' }}
+                  </div>
+                </div>
+                <div class="min-w-0 space-y-1">
+                  <div class="truncate text-sm font-medium text-gray-900 dark:text-white">
+                    {{ detail.pool.name || '-' }}
+                  </div>
+                  <div class="truncate text-xs text-gray-500 dark:text-gray-400">
+                    {{ detail.pool.group_name || '-' }} · {{ formatSyncId(detail.pool.synced_group_id) }}
+                  </div>
+                </div>
+                <div class="space-y-1 text-xs text-gray-600 dark:text-gray-300">
+                  <div>{{ t('admin.upstreamChannels.list.upstreamGroupRate') }} x{{ formatMultiplier(detail.pool.upstream_group_rate_multiplier) }}</div>
+                  <div>{{ t('admin.upstreamChannels.list.localGroupRate') }} x{{ formatMultiplier(detail.pool.group_rate_multiplier) }}</div>
+                  <div>{{ t('admin.upstreamChannels.list.accountRate') }} x{{ formatMultiplier(detail.pool.account_rate_multiplier) }}</div>
+                </div>
+                <div class="min-w-0 space-y-1">
+                  <div class="truncate text-sm text-gray-900 dark:text-white">
+                    {{ detail.key?.name || keyPresenceLabel(detail.key) }}
+                  </div>
+                  <div class="truncate text-xs text-gray-500 dark:text-gray-400">
+                    {{ keyPresenceLabel(detail.key) }} · {{ formatSyncId(detail.key?.synced_account_id) }}
+                  </div>
+                </div>
+                <div class="min-w-0">
+                  <div
+                    class="upstream-supported-models"
+                    :title="supportedModelsTitle(detail.key)"
+                  >
+                    <template v-if="supportedModels(detail.key).length > 0">
+                      <span
+                        v-for="model in visibleSupportedModels(detail.key)"
+                        :key="model"
+                        class="max-w-full break-all rounded-md bg-gray-100 px-1.5 py-0.5 text-xs text-gray-700 dark:bg-dark-700 dark:text-gray-200"
+                      >
+                        {{ model }}
+                      </span>
+                      <span
+                        v-if="hiddenSupportedModelsCount(detail.key) > 0"
+                        class="rounded-md bg-gray-50 px-1.5 py-0.5 text-xs text-gray-500 dark:bg-dark-800 dark:text-gray-400"
+                      >
+                        +{{ hiddenSupportedModelsCount(detail.key) }}
+                      </span>
+                    </template>
+                    <span v-else class="text-xs text-gray-500 dark:text-gray-400">-</span>
+                  </div>
+                </div>
+                <div class="space-y-1 text-xs text-gray-600 dark:text-gray-300">
+                  <div>{{ t('admin.upstreamChannels.form.loadFactor') }} {{ detail.pool.load_factor ?? '-' }}</div>
+                  <div>{{ t('admin.upstreamChannels.form.concurrency') }} {{ detail.pool.concurrency ?? '-' }}</div>
+                </div>
+                <div class="space-y-1 text-xs text-gray-600 dark:text-gray-300">
+                  <div>{{ formatKeyTest(detail.key) }}</div>
+                  <div v-if="formatKeyTestModel(detail.key)" class="truncate text-gray-400">
+                    {{ formatKeyTestModel(detail.key) }}
+                  </div>
+                </div>
+                <div class="flex justify-end">
+                  <button
+                    type="button"
+                    class="table-action"
+                    :title="t('admin.upstreamChannels.actions.test')"
+                    :disabled="isTestingDetail(row, detail)"
+                    @click="handleDetailTest(row, detail)"
+                  >
+                    <Icon name="bolt" size="sm" />
+                    <span class="text-xs">{{ t('admin.upstreamChannels.actions.test') }}</span>
+                  </button>
+                </div>
+              </div>
             </div>
-          </template>
-
-          <template #cell-key_count="{ row }">
-            <span class="text-sm text-gray-700 dark:text-gray-300">
-              {{ countKeys(row) }}
-            </span>
           </template>
 
           <template #cell-updated_at="{ value }">
@@ -366,7 +446,11 @@
                         </div>
                       </div>
 
-                      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                        <div>
+                          <label class="input-label">{{ t('admin.upstreamChannels.form.upstreamGroupMultiplier') }}</label>
+                          <input v-model.number="pool.upstream_group_rate_multiplier" type="number" min="0" step="0.0001" class="input" />
+                        </div>
                         <div>
                           <label class="input-label">{{ t('admin.upstreamChannels.form.groupMultiplier') }}</label>
                           <input v-model.number="pool.group_rate_multiplier" type="number" min="0" step="0.0001" class="input" />
@@ -426,8 +510,8 @@
 
                           <div class="mt-3 text-sm text-gray-600 dark:text-gray-400">
                             <span>{{ t('admin.upstreamChannels.form.lastTest') }}: {{ formatKeyTest(accountKey) }}</span>
-                            <span v-if="accountKey.last_test_message" class="ml-2 text-xs text-gray-400">
-                              {{ accountKey.last_test_message }}
+                            <span v-if="formatKeyTestModel(accountKey)" class="ml-2 text-xs text-gray-400">
+                              {{ formatKeyTestModel(accountKey) }}
                             </span>
                           </div>
                         </div>
@@ -634,6 +718,12 @@
           <div class="mt-1 text-sm text-gray-600 dark:text-gray-400">
             {{ t('admin.upstreamChannels.test.latency') }}：{{ formatLatency(result.latency_ms) }}
           </div>
+          <div v-if="result.test_model" class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+            {{ t('admin.upstreamChannels.test.model') }}：{{ result.test_model }}
+          </div>
+          <div v-if="result.models?.length" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.upstreamChannels.test.supportedModels') }}：{{ result.models.slice(0, 8).join(', ') }}{{ result.models.length > 8 ? ` +${result.models.length - 8}` : '' }}
+          </div>
           <div v-if="result.message" class="mt-1 text-sm text-gray-500 dark:text-gray-400">
             {{ t('admin.upstreamChannels.test.response') }}：{{ testMessageLabel(result.message) }}
           </div>
@@ -667,7 +757,10 @@ import upstreamChannelsAPI from '@/api/admin/upstreamChannels'
 import type {
   CreateUpstreamChannelRequest,
   UpstreamChannel,
+  UpstreamKey,
+  UpstreamKeyPool,
   UpstreamKeyPayload,
+  UpstreamPlatform,
   UpstreamProvider,
   UpstreamResourceStatus,
   UpstreamSyncPreviewResponse,
@@ -675,7 +768,7 @@ import type {
   UpstreamTestResult,
   UpdateUpstreamChannelRequest,
 } from '@/api/admin/upstreamChannels'
-import type { AdminGroup, GroupPlatform } from '@/types'
+import type { AccountPlatform, AdminGroup, GroupPlatform } from '@/types'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -688,7 +781,7 @@ import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 
-type SupportedProvider = 'anthropic' | 'openai'
+type SupportedProvider = AccountPlatform
 const CREATE_GROUP_OPTION_VALUE = '__create_upstream_group__'
 
 interface FormKey {
@@ -697,8 +790,11 @@ interface FormKey {
   name: string
   api_key: string
   api_key_masked: string
+  has_api_key: boolean
   status: UpstreamResourceStatus
   synced_account_id: number | null
+  supported_models: string[]
+  last_test_model: string | null
   last_test_latency_ms: number | null
   last_test_status: string | null
   last_test_message: string | null
@@ -710,6 +806,7 @@ interface FormPool {
   name: string
   group_name: string
   group_rate_multiplier: number
+  upstream_group_rate_multiplier: number
   account_rate_multiplier: number
   load_factor: number
   concurrency: number
@@ -736,23 +833,41 @@ interface SummaryCard {
   valueClass: string
 }
 
+interface ChannelDetailRow {
+  platform: UpstreamPlatform
+  pool: UpstreamKeyPool
+  key: UpstreamKey | null
+}
+
 const { t } = useI18n()
 const appStore = useAppStore()
 
-const supportedProviders: SupportedProvider[] = ['anthropic', 'openai']
+const supportedProviders: SupportedProvider[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'grok']
 const providerDefaults: Record<SupportedProvider, { baseUrl: string; displayNameKey: string }> = {
   anthropic: {
     baseUrl: 'https://api.anthropic.com',
     displayNameKey: 'admin.upstreamChannels.providers.anthropic',
   },
   openai: {
-    baseUrl: 'https://api.openai.com/v1',
+    baseUrl: 'https://api.openai.com',
     displayNameKey: 'admin.upstreamChannels.providers.openai',
+  },
+  gemini: {
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    displayNameKey: 'admin.upstreamChannels.providers.gemini',
+  },
+  antigravity: {
+    baseUrl: 'https://cloudcode-pa.googleapis.com',
+    displayNameKey: 'admin.upstreamChannels.providers.antigravity',
+  },
+  grok: {
+    baseUrl: 'https://api.x.ai/v1',
+    displayNameKey: 'admin.upstreamChannels.providers.grok',
   },
 }
 
 function isSupportedProvider(provider: UpstreamProvider): provider is SupportedProvider {
-  return provider === 'anthropic' || provider === 'openai'
+  return supportedProviders.includes(normalizeProviderValue(provider) as SupportedProvider)
 }
 
 let uidCounter = 0
@@ -787,6 +902,7 @@ const deletingChannel = ref<UpstreamChannel | null>(null)
 const previewingId = ref<number | null>(null)
 const syncingId = ref<number | null>(null)
 const testingId = ref<number | null>(null)
+const testingTarget = ref<string | null>(null)
 const showPreviewDialog = ref(false)
 const showTestDialog = ref(false)
 const syncPreviewResult = ref<UpstreamSyncPreviewResponse | null>(null)
@@ -801,8 +917,7 @@ const form = reactive({
 
 const columns = computed<Column[]>(() => [
   { key: 'name', label: t('admin.upstreamChannels.columns.name'), sortable: true },
-  { key: 'platforms', label: t('admin.upstreamChannels.columns.platforms'), sortable: false },
-  { key: 'key_count', label: t('admin.upstreamChannels.columns.keys'), sortable: false },
+  { key: 'details', label: t('admin.upstreamChannels.columns.details'), sortable: false, class: 'min-w-0 !whitespace-normal align-top' },
   { key: 'updated_at', label: t('admin.upstreamChannels.columns.updatedAt'), sortable: true },
   { key: 'actions', label: t('admin.upstreamChannels.columns.actions'), sortable: false },
 ])
@@ -912,6 +1027,15 @@ function providerBadgeClass(provider: UpstreamProvider): string {
   if (provider === 'openai') {
     return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300'
   }
+  if (provider === 'gemini') {
+    return 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300'
+  }
+  if (provider === 'antigravity') {
+    return 'bg-purple-50 text-purple-700 dark:bg-purple-900/20 dark:text-purple-300'
+  }
+  if (provider === 'grok') {
+    return 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
+  }
   return 'bg-gray-100 text-gray-700 dark:bg-dark-700 dark:text-gray-300'
 }
 
@@ -922,8 +1046,11 @@ function createKeyForm(seed?: Partial<FormKey>): FormKey {
     name: seed?.name || '',
     api_key: '',
     api_key_masked: seed?.api_key_masked || '',
+    has_api_key: seed?.has_api_key ?? Boolean(seed?.api_key_masked),
     status: seed?.status || 'active',
     synced_account_id: seed?.synced_account_id ?? null,
+    supported_models: seed?.supported_models ? [...seed.supported_models] : [],
+    last_test_model: seed?.last_test_model ?? null,
     last_test_latency_ms: seed?.last_test_latency_ms ?? null,
     last_test_status: seed?.last_test_status ?? null,
     last_test_message: seed?.last_test_message ?? null,
@@ -944,6 +1071,7 @@ function createPoolForm(provider: UpstreamProvider, seed?: Partial<FormPool>): F
     name: seed?.name || `${label} ${t('admin.upstreamChannels.form.defaultPoolSuffix')}`,
     group_name: seed?.group_name || `${label} ${t('admin.upstreamChannels.form.defaultGroupSuffix')}`,
     group_rate_multiplier: seed?.group_rate_multiplier ?? 1,
+    upstream_group_rate_multiplier: seed?.upstream_group_rate_multiplier ?? 1,
     account_rate_multiplier: seed?.account_rate_multiplier ?? 1,
     load_factor: seed?.load_factor ?? 1,
     concurrency: seed?.concurrency ?? 1,
@@ -979,6 +1107,7 @@ function apiToForm(channel: UpstreamChannel): FormPlatform[] {
       name: pool.name,
       group_name: pool.group_name,
       group_rate_multiplier: pool.group_rate_multiplier,
+      upstream_group_rate_multiplier: pool.upstream_group_rate_multiplier,
       account_rate_multiplier: pool.account_rate_multiplier,
       load_factor: pool.load_factor,
       concurrency: pool.concurrency,
@@ -988,8 +1117,11 @@ function apiToForm(channel: UpstreamChannel): FormPlatform[] {
         id: key.id,
         name: key.name,
         api_key_masked: key.api_key_masked,
+        has_api_key: key.has_api_key,
         status: key.status,
         synced_account_id: key.synced_account_id,
+        supported_models: key.supported_models || [],
+        last_test_model: key.last_test_model || null,
         last_test_latency_ms: key.last_test_latency_ms,
         last_test_status: key.last_test_status,
         last_test_message: key.last_test_message,
@@ -1013,14 +1145,6 @@ function assignForm(channel: UpstreamChannel) {
   form.platforms = apiToForm(channel)
 }
 
-function countKeys(channel: UpstreamChannel): number {
-  return (channel.platforms || []).reduce((total, platform) => {
-    return total + (platform.key_pools || []).reduce((poolTotal, pool) => {
-      return poolTotal + (pool.keys || []).length
-    }, 0)
-  }, 0)
-}
-
 function formatDateTime(value: string): string {
   if (!value) return '-'
   return new Date(value).toLocaleString()
@@ -1034,11 +1158,76 @@ function formatLatency(value: number | null | undefined): string {
   return value == null ? '-' : `${value} ms`
 }
 
-function formatKeyTest(key: FormKey): string {
-  if (!key.last_test_status && key.last_test_latency_ms == null) return '-'
+function formatMultiplier(value: number | null | undefined): string {
+  if (value == null) return '1'
+  return Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 })
+}
+
+function formatKeyTest(key: Pick<FormKey, 'last_test_status' | 'last_test_latency_ms'> | null | undefined): string {
+  if (!key || (!key.last_test_status && key.last_test_latency_ms == null)) return '-'
   const status = testStatusLabel(key.last_test_status || 'unknown')
   const latency = formatLatency(key.last_test_latency_ms)
   return latency === '-' ? status : `${status} / ${latency}`
+}
+
+function formatKeyTestModel(key: { last_test_model?: string | null } | null | undefined): string {
+  return key?.last_test_model?.trim() || ''
+}
+
+function keyPresenceLabel(key: Pick<UpstreamKey, 'has_api_key' | 'api_key_masked'> | null | undefined): string {
+  if (!key) return '-'
+  return key.has_api_key || Boolean(key.api_key_masked)
+    ? t('admin.upstreamChannels.list.keyPresent')
+    : t('admin.upstreamChannels.list.keyMissing')
+}
+
+function supportedModels(key: Pick<UpstreamKey, 'supported_models'> | null | undefined): string[] {
+  return (key?.supported_models || []).filter(Boolean)
+}
+
+function visibleSupportedModels(key: Pick<UpstreamKey, 'supported_models'> | null | undefined): string[] {
+  return supportedModels(key).slice(0, 12)
+}
+
+function hiddenSupportedModelsCount(key: Pick<UpstreamKey, 'supported_models'> | null | undefined): number {
+  return Math.max(supportedModels(key).length - 12, 0)
+}
+
+function supportedModelsTitle(key: Pick<UpstreamKey, 'supported_models'> | null | undefined): string {
+  const models = supportedModels(key)
+  return models.length > 0 ? models.join('\n') : ''
+}
+
+function channelDetailRows(channel: UpstreamChannel): ChannelDetailRow[] {
+  const rows: ChannelDetailRow[] = []
+  for (const platform of channel.platforms || []) {
+    for (const pool of platform.key_pools || []) {
+      const keys = pool.keys?.length ? pool.keys : [null]
+      for (const key of keys) {
+        rows.push({ platform, pool, key })
+      }
+    }
+  }
+  return rows
+}
+
+function detailRowKey(detail: ChannelDetailRow): string {
+  return [
+    detail.platform.id,
+    detail.pool.id,
+    detail.key?.id || detail.key?.name || detail.key?.api_key_masked || 'pool',
+  ].join(':')
+}
+
+function detailTestTarget(channel: UpstreamChannel, detail?: ChannelDetailRow): string {
+  if (!detail) return `channel:${channel.id}`
+  if (detail.key?.id) return `key:${detail.key.id}`
+  if (detail.pool.id) return `pool:${detail.pool.id}`
+  return `channel:${channel.id}`
+}
+
+function isTestingDetail(channel: UpstreamChannel, detail: ChannelDetailRow): boolean {
+  return testingId.value === channel.id && testingTarget.value === detailTestTarget(channel, detail)
 }
 
 function toNumber(value: unknown, fallback: number): number {
@@ -1320,6 +1509,7 @@ function validateForm(): boolean {
       seenPoolNames.add(poolNameKey)
       if (
         toNumber(pool.group_rate_multiplier, -1) < 0 ||
+        toNumber(pool.upstream_group_rate_multiplier, -1) < 0 ||
         toNumber(pool.account_rate_multiplier, -1) < 0 ||
         toNumber(pool.load_factor, -1) < 0 ||
         toNumber(pool.concurrency, -1) < 0
@@ -1356,6 +1546,7 @@ function formToPayload(): CreateUpstreamChannelRequest {
           name: pool.name.trim(),
           group_name: pool.group_name.trim(),
           group_rate_multiplier: toNumber(pool.group_rate_multiplier, 1),
+          upstream_group_rate_multiplier: toNumber(pool.upstream_group_rate_multiplier, 1),
           account_rate_multiplier: toNumber(pool.account_rate_multiplier, 1),
           load_factor: Math.trunc(toNumber(pool.load_factor, 1)),
           concurrency: toNumber(pool.concurrency, 1),
@@ -1455,11 +1646,13 @@ async function handleSync(channel: UpstreamChannel) {
   }
 }
 
-async function handleTest(channel: UpstreamChannel) {
+async function handleTest(channel: UpstreamChannel, payload: { pool_id?: number; key_id?: number } = {}) {
   if (testingId.value != null) return
+  const target = payload.key_id ? `key:${payload.key_id}` : payload.pool_id ? `pool:${payload.pool_id}` : `channel:${channel.id}`
   testingId.value = channel.id
+  testingTarget.value = target
   try {
-    testResult.value = await upstreamChannelsAPI.test(channel.id)
+    testResult.value = await upstreamChannelsAPI.test(channel.id, payload)
     showTestDialog.value = true
     appStore.showSuccess(t('admin.upstreamChannels.test.success'))
     reload()
@@ -1467,7 +1660,20 @@ async function handleTest(channel: UpstreamChannel) {
     appStore.showError(extractApiErrorMessage(error, t('admin.upstreamChannels.test.failed')))
   } finally {
     testingId.value = null
+    testingTarget.value = null
   }
+}
+
+function handleDetailTest(channel: UpstreamChannel, detail: ChannelDetailRow) {
+  if (detail.key?.id) {
+    handleTest(channel, { key_id: detail.key.id })
+    return
+  }
+  if (detail.pool.id) {
+    handleTest(channel, { pool_id: detail.pool.id })
+    return
+  }
+  handleTest(channel)
 }
 
 function readableKey(value: string): string {
@@ -1684,6 +1890,45 @@ onUnmounted(() => {
 
 .table-action-danger {
   @apply hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400;
+}
+
+.upstream-detail-grid {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  grid-template-columns:
+    7rem
+    9.5rem
+    8.5rem
+    10rem
+    minmax(0, 1fr)
+    6.5rem
+    8rem
+    3.75rem;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.upstream-detail-grid > * {
+  min-width: 0;
+}
+
+.upstream-detail-head {
+  @apply rounded-t-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-500 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-400;
+}
+
+.upstream-detail-row {
+  @apply border-x border-b border-gray-200 px-3 py-2 dark:border-dark-700;
+}
+
+.upstream-supported-models {
+  display: flex;
+  max-width: min(100%, 34rem);
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  overflow: hidden;
 }
 
 .readonly-field {

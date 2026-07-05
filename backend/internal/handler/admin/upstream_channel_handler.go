@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"errors"
+	"io"
 	"strconv"
 	"strings"
 
@@ -36,16 +38,17 @@ type upstreamPlatformRequest struct {
 }
 
 type upstreamKeyPoolRequest struct {
-	ID                    int64                `json:"id"`
-	Name                  string               `json:"name"`
-	GroupName             string               `json:"group_name"`
-	GroupRateMultiplier   float64              `json:"group_rate_multiplier"`
-	AccountRateMultiplier float64              `json:"account_rate_multiplier"`
-	LoadFactor            int                  `json:"load_factor"`
-	Concurrency           int                  `json:"concurrency"`
-	Status                string               `json:"status" binding:"omitempty,oneof=active disabled error"`
-	SyncedGroupID         *int64               `json:"synced_group_id"`
-	Keys                  []upstreamKeyRequest `json:"keys"`
+	ID                          int64                `json:"id"`
+	Name                        string               `json:"name"`
+	GroupName                   string               `json:"group_name"`
+	UpstreamGroupRateMultiplier float64              `json:"upstream_group_rate_multiplier"`
+	GroupRateMultiplier         float64              `json:"group_rate_multiplier"`
+	AccountRateMultiplier       float64              `json:"account_rate_multiplier"`
+	LoadFactor                  int                  `json:"load_factor"`
+	Concurrency                 int                  `json:"concurrency"`
+	Status                      string               `json:"status" binding:"omitempty,oneof=active disabled error"`
+	SyncedGroupID               *int64               `json:"synced_group_id"`
+	Keys                        []upstreamKeyRequest `json:"keys"`
 }
 
 type upstreamKeyRequest struct {
@@ -54,6 +57,11 @@ type upstreamKeyRequest struct {
 	APIKey          string `json:"api_key"`
 	Status          string `json:"status" binding:"omitempty,oneof=active disabled error"`
 	SyncedAccountID *int64 `json:"synced_account_id"`
+}
+
+type upstreamTestRequest struct {
+	KeyID  *int64 `json:"key_id"`
+	PoolID *int64 `json:"pool_id"`
 }
 
 func (h *UpstreamChannelHandler) List(c *gin.Context) {
@@ -179,7 +187,12 @@ func (h *UpstreamChannelHandler) Test(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	results, err := h.service.TestChannel(c.Request.Context(), id)
+	filter, err := parseUpstreamTestFilter(c)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	results, err := h.service.TestChannelFiltered(c.Request.Context(), id, filter)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -193,6 +206,32 @@ func parseUpstreamChannelID(c *gin.Context) (int64, error) {
 		return 0, infraerrors.BadRequest("INVALID_UPSTREAM_CHANNEL_ID", "invalid upstream channel ID")
 	}
 	return id, nil
+}
+
+func parseUpstreamTestFilter(c *gin.Context) (service.UpstreamTestFilter, error) {
+	var req upstreamTestRequest
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		return service.UpstreamTestFilter{}, infraerrors.BadRequest("VALIDATION_ERROR", err.Error())
+	}
+	filter := service.UpstreamTestFilter{
+		KeyID:  req.KeyID,
+		PoolID: req.PoolID,
+	}
+	if v := strings.TrimSpace(c.Query("key_id")); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || id <= 0 {
+			return filter, infraerrors.BadRequest("INVALID_UPSTREAM_KEY_ID", "invalid upstream key ID")
+		}
+		filter.KeyID = &id
+	}
+	if v := strings.TrimSpace(c.Query("pool_id")); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || id <= 0 {
+			return filter, infraerrors.BadRequest("INVALID_UPSTREAM_POOL_ID", "invalid upstream pool ID")
+		}
+		filter.PoolID = &id
+	}
+	return filter, nil
 }
 
 func isUpstreamStatusOnlyUpdate(req upstreamChannelRequest) bool {
@@ -220,16 +259,17 @@ func upstreamChannelRequestToService(req upstreamChannelRequest) *service.Upstre
 		}
 		for _, kp := range p.KeyPools {
 			pool := service.UpstreamKeyPool{
-				ID:                    kp.ID,
-				Name:                  kp.Name,
-				GroupName:             kp.GroupName,
-				GroupRateMultiplier:   kp.GroupRateMultiplier,
-				AccountRateMultiplier: kp.AccountRateMultiplier,
-				LoadFactor:            kp.LoadFactor,
-				Concurrency:           kp.Concurrency,
-				Status:                kp.Status,
-				SyncedGroupID:         kp.SyncedGroupID,
-				Keys:                  make([]service.UpstreamKey, 0, len(kp.Keys)),
+				ID:                          kp.ID,
+				Name:                        kp.Name,
+				GroupName:                   kp.GroupName,
+				UpstreamGroupRateMultiplier: kp.UpstreamGroupRateMultiplier,
+				GroupRateMultiplier:         kp.GroupRateMultiplier,
+				AccountRateMultiplier:       kp.AccountRateMultiplier,
+				LoadFactor:                  kp.LoadFactor,
+				Concurrency:                 kp.Concurrency,
+				Status:                      kp.Status,
+				SyncedGroupID:               kp.SyncedGroupID,
+				Keys:                        make([]service.UpstreamKey, 0, len(kp.Keys)),
 			}
 			for _, k := range kp.Keys {
 				pool.Keys = append(pool.Keys, service.UpstreamKey{
