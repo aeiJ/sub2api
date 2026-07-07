@@ -100,6 +100,9 @@ func RegisterAdminRoutes(
 		// 上游管理
 		registerUpstreamChannelRoutes(admin, h)
 
+		// API Key 账号渠道监控
+		registerUpstreamAccountMonitorRoutes(admin, h)
+
 		// 渠道监控
 		registerChannelMonitorRoutes(admin, h)
 
@@ -151,6 +154,18 @@ func registerUpstreamChannelRoutes(admin *gin.RouterGroup, h *handler.Handlers) 
 		upstreams.POST("/:id/sync-preview", h.Admin.UpstreamChannel.SyncPreview)
 		upstreams.POST("/:id/sync", h.Admin.UpstreamChannel.Sync)
 		upstreams.POST("/:id/test", h.Admin.UpstreamChannel.Test)
+	}
+}
+
+func registerUpstreamAccountMonitorRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	monitors := admin.Group("/upstream-account-monitors")
+	{
+		monitors.GET("", h.Admin.UpstreamAccountMonitor.List)
+		monitors.POST("/run-all", h.Admin.UpstreamAccountMonitor.RunAll)
+		monitors.POST("/enable-all", h.Admin.UpstreamAccountMonitor.EnableAll)
+		monitors.POST("/disable-all", h.Admin.UpstreamAccountMonitor.DisableAll)
+		monitors.POST("/:accountId/run", h.Admin.UpstreamAccountMonitor.RunOne)
+		monitors.PUT("/:accountId/settings", h.Admin.UpstreamAccountMonitor.UpdateSettings)
 	}
 }
 

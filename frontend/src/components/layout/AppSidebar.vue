@@ -722,7 +722,17 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/ops', label: t('nav.ops'), icon: ChartIcon, featureFlag: flagOpsMonitoring },
     { path: '/admin/users', label: t('nav.users'), icon: UsersIcon, hideInSimpleMode: true },
     { path: '/admin/groups', label: t('nav.groups'), icon: FolderIcon, hideInSimpleMode: true },
-    { path: '/admin/upstreams', label: t('nav.upstreamChannels'), icon: ServerIcon, hideInSimpleMode: true },
+    {
+      path: '/admin/upstreams',
+      label: t('nav.upstreamChannels'),
+      icon: ServerIcon,
+      hideInSimpleMode: true,
+      expandOnly: true,
+      children: [
+        { path: '/admin/upstreams', label: t('nav.upstreamAccounts'), icon: GlobeIcon },
+        { path: '/admin/upstreams/monitor', label: t('nav.channelMonitor'), icon: SignalIcon, featureFlag: flagChannelMonitor },
+      ],
+    },
     {
       path: '/admin/channels',
       label: t('nav.channelManagement'),
@@ -847,13 +857,18 @@ function toggleGroup(item: NavItem) {
 
 /**
  * Click handler for collapsible parent items.
- * - When sidebar is collapsed: do nothing (children are not visible).
+ * - When sidebar is collapsed: navigate to the parent path because children are not visible.
  * - When `expandOnly` is true: only toggle expand state.
  * - Otherwise (default, e.g. /admin/orders): navigate to the parent path
  *   (router-link semantics) and ensure the group is expanded.
  */
 function handleGroupClick(item: NavItem) {
-  if (sidebarCollapsed.value) return
+  if (sidebarCollapsed.value) {
+    if (route.path !== item.path) {
+      router.push(item.path)
+    }
+    return
+  }
   if (item.expandOnly) {
     toggleGroup(item)
     return
