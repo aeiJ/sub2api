@@ -109,6 +109,25 @@ func TestUpstreamChannelHandlerUpdateStatusOnlyPreservesChannelConfig(t *testing
 	require.Len(t, stored.Platforms[0].KeyPools[0].Keys, 1)
 }
 
+func TestUpstreamChannelHandlerListPassesProviderFilter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := newAdminUpstreamFakeRepo()
+	svc := service.NewUpstreamChannelService(repo, nil, nil, nil, adminUpstreamFakeEncryptor{}, nil, nil)
+	handler := NewUpstreamChannelHandler(svc)
+
+	router := gin.New()
+	router.GET("/upstreams", handler.List)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/upstreams?provider=openai&status=active&search=prod", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "openai", repo.lastListProvider)
+	require.Equal(t, "active", repo.lastListStatus)
+	require.Equal(t, "prod", repo.lastListSearch)
+}
+
 func TestUpstreamChannelHandlerTestAcceptsFilteredBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := newAdminUpstreamFakeRepo()
@@ -191,9 +210,12 @@ func (adminUpstreamFakeEncryptor) Decrypt(ciphertext string) (string, error) {
 }
 
 type adminUpstreamFakeRepo struct {
-	nextID       int64
-	channels     map[int64]*service.UpstreamChannel
-	testedKeyIDs []int64
+	nextID           int64
+	channels         map[int64]*service.UpstreamChannel
+	testedKeyIDs     []int64
+	lastListStatus   string
+	lastListProvider string
+	lastListSearch   string
 }
 
 func newAdminUpstreamFakeRepo() *adminUpstreamFakeRepo {
@@ -231,7 +253,10 @@ func (r *adminUpstreamFakeRepo) GetByID(_ context.Context, id int64) (*service.U
 	return &cp, nil
 }
 
-func (r *adminUpstreamFakeRepo) List(_ context.Context, _ pagination.PaginationParams, _, _ string) ([]service.UpstreamChannel, *pagination.PaginationResult, error) {
+func (r *adminUpstreamFakeRepo) List(_ context.Context, _ pagination.PaginationParams, status, provider, search string) ([]service.UpstreamChannel, *pagination.PaginationResult, error) {
+	r.lastListStatus = status
+	r.lastListProvider = provider
+	r.lastListSearch = search
 	return nil, &pagination.PaginationResult{}, nil
 }
 

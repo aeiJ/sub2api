@@ -130,6 +130,7 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+!docs/OFFLINE_REBUILD_RUN_CN.md
 !docs/git-branch-management.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md

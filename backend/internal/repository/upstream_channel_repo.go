@@ -109,17 +109,26 @@ func (r *upstreamChannelRepository) GetByID(ctx context.Context, id int64) (*ser
 	return &channels[0], nil
 }
 
-func (r *upstreamChannelRepository) List(ctx context.Context, params pagination.PaginationParams, status, search string) ([]service.UpstreamChannel, *pagination.PaginationResult, error) {
+func (r *upstreamChannelRepository) List(ctx context.Context, params pagination.PaginationParams, status, provider, search string) ([]service.UpstreamChannel, *pagination.PaginationResult, error) {
 	where := []string{"1=1"}
 	args := []any{}
 	argIdx := 1
 	if status != "" {
-		where = append(where, fmt.Sprintf("status = $%d", argIdx))
+		where = append(where, fmt.Sprintf("upstream_channels.status = $%d", argIdx))
 		args = append(args, status)
 		argIdx++
 	}
+	if provider != "" {
+		where = append(where, fmt.Sprintf(`EXISTS (
+			SELECT 1 FROM upstream_platforms
+			WHERE upstream_platforms.channel_id = upstream_channels.id
+			  AND upstream_platforms.provider = $%d
+		)`, argIdx))
+		args = append(args, provider)
+		argIdx++
+	}
 	if search != "" {
-		where = append(where, fmt.Sprintf("(name ILIKE $%d OR description ILIKE $%d)", argIdx, argIdx))
+		where = append(where, fmt.Sprintf("(upstream_channels.name ILIKE $%d OR upstream_channels.description ILIKE $%d)", argIdx, argIdx))
 		args = append(args, "%"+escapeLike(search)+"%")
 		argIdx++
 	}

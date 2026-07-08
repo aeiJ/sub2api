@@ -170,6 +170,57 @@ func TestUpstreamChannelServiceCreateRejectsDuplicatePlatformsAndPools(t *testin
 	require.Equal(t, "UPSTREAM_KEY_POOL_DUPLICATE", infraerrors.Reason(err))
 }
 
+func TestUpstreamChannelServiceCreateRejectsEmptyPlatformsAndNewKeyWithoutAPIKey(t *testing.T) {
+	svc := NewUpstreamChannelService(newFakeUpstreamRepo(), nil, nil, nil, fakeUpstreamEncryptor{}, nil, nil)
+
+	_, err := svc.Create(context.Background(), &UpstreamChannel{Name: "Empty upstream"})
+	require.Error(t, err)
+	require.Equal(t, "UPSTREAM_PLATFORM_REQUIRED", infraerrors.Reason(err))
+
+	_, err = svc.Create(context.Background(), &UpstreamChannel{
+		Name: "Missing key",
+		Platforms: []UpstreamPlatform{{
+			Provider: PlatformOpenAI,
+			KeyPools: []UpstreamKeyPool{{
+				Name:      "GPT pool",
+				GroupName: "GPT group",
+				Keys:      []UpstreamKey{{Name: "blank"}},
+			}},
+		}},
+	})
+	require.Error(t, err)
+	require.Equal(t, "UPSTREAM_KEY_API_KEY_REQUIRED", infraerrors.Reason(err))
+}
+
+func TestUpstreamChannelServiceListFiltersByProvider(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeUpstreamRepo()
+	svc := NewUpstreamChannelService(repo, nil, nil, nil, fakeUpstreamEncryptor{}, nil, nil)
+
+	_, err := svc.Create(ctx, &UpstreamChannel{
+		Name: "OpenAI upstream",
+		Platforms: []UpstreamPlatform{{
+			Provider: PlatformOpenAI,
+			KeyPools: []UpstreamKeyPool{{Name: "GPT pool", GroupName: "GPT group"}},
+		}},
+	})
+	require.NoError(t, err)
+	_, err = svc.Create(ctx, &UpstreamChannel{
+		Name: "Anthropic upstream",
+		Platforms: []UpstreamPlatform{{
+			Provider: PlatformAnthropic,
+			KeyPools: []UpstreamKeyPool{{Name: "Claude pool", GroupName: "Claude group"}},
+		}},
+	})
+	require.NoError(t, err)
+
+	channels, pag, err := svc.List(ctx, pagination.PaginationParams{Page: 1, PageSize: 20}, "", PlatformOpenAI, "")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), pag.Total)
+	require.Len(t, channels, 1)
+	require.Equal(t, "OpenAI upstream", channels[0].Name)
+}
+
 func TestUpstreamChannelServiceSyncIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeUpstreamRepo()
@@ -234,6 +285,75 @@ func TestUpstreamChannelServiceSyncIsIdempotent(t *testing.T) {
 	require.Equal(t, []int64{*pool.SyncedGroupID}, account.GroupIDs)
 	require.Equal(t, 0.8, *account.RateMultiplier)
 	require.Equal(t, 4, *account.LoadFactor)
+}
+
+func TestUpstreamChannelServiceSyncRecoversAccountWhenSyncedIDWriteFailed(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeUpstreamRepo()
+	groups := newFakeUpstreamGroups()
+	admin := newFakeUpstreamAdmin(groups)
+	svc := NewUpstreamChannelService(repo, admin, admin, groups, fakeUpstreamEncryptor{}, nil, nil)
+
+	channel, err := svc.Create(ctx, &UpstreamChannel{
+		Name: "Recover upstream",
+		Platforms: []UpstreamPlatform{{
+			Provider: PlatformOpenAI,
+			KeyPools: []UpstreamKeyPool{{
+				Name:      "GPT pool",
+				GroupName: "GPT group",
+				Keys:      []UpstreamKey{{Name: "gpt-key", APIKey: "sk-test-123456"}},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+
+	repo.failNextKeySyncedWrite = true
+	first, err := svc.Sync(ctx, channel.ID)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.Summary["create_account"])
+	require.NotEmpty(t, first.Warnings)
+
+	reloaded, err := repo.GetByID(ctx, channel.ID)
+	require.NoError(t, err)
+	require.Nil(t, reloaded.Platforms[0].KeyPools[0].Keys[0].SyncedAccountID)
+
+	second, err := svc.Sync(ctx, channel.ID)
+	require.NoError(t, err)
+	require.Equal(t, 1, second.Summary["update_account"])
+	require.Equal(t, 1, admin.createAccountCalls)
+	require.Equal(t, 1, admin.updateAccountCalls)
+
+	reloaded, err = repo.GetByID(ctx, channel.ID)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded.Platforms[0].KeyPools[0].Keys[0].SyncedAccountID)
+}
+
+func TestUpstreamChannelServiceSyncWarnsWhenGroupSyncedIDWriteFails(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeUpstreamRepo()
+	groups := newFakeUpstreamGroups()
+	admin := newFakeUpstreamAdmin(groups)
+	svc := NewUpstreamChannelService(repo, admin, admin, groups, fakeUpstreamEncryptor{}, nil, nil)
+
+	channel, err := svc.Create(ctx, &UpstreamChannel{
+		Name: "Group write warning",
+		Platforms: []UpstreamPlatform{{
+			Provider: PlatformOpenAI,
+			KeyPools: []UpstreamKeyPool{{
+				Name:      "GPT pool",
+				GroupName: "GPT group",
+				Keys:      []UpstreamKey{{Name: "gpt-key", APIKey: "sk-test-123456"}},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+
+	repo.failNextPoolSyncedWrite = true
+	result, err := svc.Sync(ctx, channel.ID)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Summary["create_group"])
+	require.NotEmpty(t, result.Warnings)
+	require.Contains(t, result.Warnings[0], "failed to persist synced group id")
 }
 
 func TestUpstreamChannelServiceSyncUsesExistingAccountCredentialsWhenUpstreamKeyBlank(t *testing.T) {
@@ -526,12 +646,15 @@ func (t *fakeUpstreamAccountTester) RunTestBackground(_ context.Context, account
 }
 
 type fakeUpstreamRepo struct {
-	nextChannelID  int64
-	nextPlatformID int64
-	nextPoolID     int64
-	nextKeyID      int64
-	channels       map[int64]*UpstreamChannel
-	testedKeyIDs   []int64
+	nextChannelID           int64
+	nextPlatformID          int64
+	nextPoolID              int64
+	nextKeyID               int64
+	channels                map[int64]*UpstreamChannel
+	testedKeyIDs            []int64
+	failNextPoolSyncedWrite bool
+	failNextKeySyncedWrite  bool
+	failSyncEventWrite      bool
 }
 
 func newFakeUpstreamRepo() *fakeUpstreamRepo {
@@ -575,15 +698,31 @@ func (r *fakeUpstreamRepo) GetByID(_ context.Context, id int64) (*UpstreamChanne
 	return &cp, nil
 }
 
-func (r *fakeUpstreamRepo) List(_ context.Context, _ pagination.PaginationParams, _, _ string) ([]UpstreamChannel, *pagination.PaginationResult, error) {
+func (r *fakeUpstreamRepo) List(_ context.Context, _ pagination.PaginationParams, _, provider, _ string) ([]UpstreamChannel, *pagination.PaginationResult, error) {
 	out := make([]UpstreamChannel, 0, len(r.channels))
 	for _, channel := range r.channels {
+		if provider != "" && !channelHasProvider(channel, provider) {
+			continue
+		}
 		out = append(out, cloneUpstreamChannel(channel))
 	}
 	return out, &pagination.PaginationResult{Total: int64(len(out)), Page: 1, PageSize: 20, Pages: 1}, nil
 }
 
+func channelHasProvider(channel *UpstreamChannel, provider string) bool {
+	for i := range channel.Platforms {
+		if normalizeProvider(channel.Platforms[i].Provider) == provider {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *fakeUpstreamRepo) UpdatePoolSyncedGroupID(_ context.Context, poolID int64, groupID int64) error {
+	if r.failNextPoolSyncedWrite {
+		r.failNextPoolSyncedWrite = false
+		return fmt.Errorf("injected synced group write failure")
+	}
 	for _, channel := range r.channels {
 		for pi := range channel.Platforms {
 			for pki := range channel.Platforms[pi].KeyPools {
@@ -599,6 +738,10 @@ func (r *fakeUpstreamRepo) UpdatePoolSyncedGroupID(_ context.Context, poolID int
 }
 
 func (r *fakeUpstreamRepo) UpdateKeySyncedAccountID(_ context.Context, keyID int64, accountID int64) error {
+	if r.failNextKeySyncedWrite {
+		r.failNextKeySyncedWrite = false
+		return fmt.Errorf("injected synced account write failure")
+	}
 	for _, channel := range r.channels {
 		for pi := range channel.Platforms {
 			for pki := range channel.Platforms[pi].KeyPools {
@@ -641,6 +784,9 @@ func (r *fakeUpstreamRepo) UpdateKeyTestResult(_ context.Context, keyID int64, r
 }
 
 func (r *fakeUpstreamRepo) RecordSyncEvent(_ context.Context, _ int64, _ string, _ map[string]int) error {
+	if r.failSyncEventWrite {
+		return fmt.Errorf("injected sync event failure")
+	}
 	return nil
 }
 

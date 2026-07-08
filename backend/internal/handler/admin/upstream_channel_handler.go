@@ -67,6 +67,7 @@ type upstreamTestRequest struct {
 func (h *UpstreamChannelHandler) List(c *gin.Context) {
 	page, pageSize := response.ParsePagination(c)
 	status := c.Query("status")
+	provider := c.Query("provider")
 	search := strings.TrimSpace(c.Query("search"))
 	if len(search) > 100 {
 		search = search[:100]
@@ -76,7 +77,7 @@ func (h *UpstreamChannelHandler) List(c *gin.Context) {
 		PageSize:  pageSize,
 		SortBy:    c.DefaultQuery("sort_by", "created_at"),
 		SortOrder: c.DefaultQuery("sort_order", "desc"),
-	}, status, search)
+	}, status, provider, search)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

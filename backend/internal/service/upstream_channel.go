@@ -35,7 +35,7 @@ type UpstreamChannelRepository interface {
 	Update(ctx context.Context, channel *UpstreamChannel) error
 	Delete(ctx context.Context, id int64) error
 	GetByID(ctx context.Context, id int64) (*UpstreamChannel, error)
-	List(ctx context.Context, params pagination.PaginationParams, status, search string) ([]UpstreamChannel, *pagination.PaginationResult, error)
+	List(ctx context.Context, params pagination.PaginationParams, status, provider, search string) ([]UpstreamChannel, *pagination.PaginationResult, error)
 	UpdatePoolSyncedGroupID(ctx context.Context, poolID int64, groupID int64) error
 	UpdateKeySyncedAccountID(ctx context.Context, keyID int64, accountID int64) error
 	UpdateKeyTestResult(ctx context.Context, keyID int64, result UpstreamTestResult) error
@@ -209,8 +209,12 @@ func NewUpstreamChannelService(
 	}
 }
 
-func (s *UpstreamChannelService) List(ctx context.Context, params pagination.PaginationParams, status, search string) ([]UpstreamChannel, *pagination.PaginationResult, error) {
-	channels, result, err := s.repo.List(ctx, params, normalizeOptionalStatus(status), strings.TrimSpace(search))
+func (s *UpstreamChannelService) List(ctx context.Context, params pagination.PaginationParams, status, provider, search string) ([]UpstreamChannel, *pagination.PaginationResult, error) {
+	normalizedProvider := normalizeProvider(provider)
+	if normalizedProvider != "" && !isSupportedUpstreamProvider(normalizedProvider) {
+		normalizedProvider = ""
+	}
+	channels, result, err := s.repo.List(ctx, params, normalizeOptionalStatus(status), normalizedProvider, strings.TrimSpace(search))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -333,9 +337,10 @@ func (s *UpstreamChannelService) Sync(ctx context.Context, channelID int64) (*Up
 				ExistingID: &group.ID,
 			})
 			if err := s.repo.UpdatePoolSyncedGroupID(ctx, pool.ID, group.ID); err != nil {
-				return nil, err
+				result.Warnings = append(result.Warnings, fmt.Sprintf("failed to persist synced group id for upstream pool %d: %v", pool.ID, err))
+			} else {
+				pool.SyncedGroupID = &group.ID
 			}
-			pool.SyncedGroupID = &group.ID
 
 			for ki := range pool.Keys {
 				key := &pool.Keys[ki]
@@ -355,16 +360,19 @@ func (s *UpstreamChannelService) Sync(ctx context.Context, channelID int64) (*Up
 				if account != nil {
 					item.ExistingID = &account.ID
 					if err := s.repo.UpdateKeySyncedAccountID(ctx, key.ID, account.ID); err != nil {
-						return nil, err
+						warnings = append(warnings, fmt.Sprintf("failed to persist synced account id for upstream key %d: %v", key.ID, err))
+						item.Warnings = warnings
+						result.Warnings = append(result.Warnings, warnings[len(warnings)-1])
+					} else {
+						key.SyncedAccountID = &account.ID
 					}
-					key.SyncedAccountID = &account.ID
 				}
 				result.addItem(item)
 			}
 		}
 	}
 	if err := s.repo.RecordSyncEvent(ctx, channel.ID, "sync", result.Summary); err != nil {
-		return nil, err
+		result.Warnings = append(result.Warnings, fmt.Sprintf("failed to record upstream sync event: %v", err))
 	}
 	return result, nil
 }
@@ -780,6 +788,9 @@ func (s *UpstreamChannelService) normalizeChannel(channel *UpstreamChannel, exis
 	}
 	channel.Description = strings.TrimSpace(channel.Description)
 	channel.Status = normalizeStatus(channel.Status)
+	if len(channel.Platforms) == 0 {
+		return infraerrors.BadRequest("UPSTREAM_PLATFORM_REQUIRED", "at least one upstream platform is required")
+	}
 
 	existingPlatforms := map[int64]*UpstreamPlatform{}
 	existingPools := map[int64]*UpstreamKeyPool{}
@@ -927,6 +938,9 @@ func (s *UpstreamChannelService) normalizeKeySecret(key *UpstreamKey, existing *
 			key.LastTestedAt = existing.LastTestedAt
 		}
 		return nil
+	}
+	if key.SyncedAccountID == nil || *key.SyncedAccountID <= 0 {
+		return infraerrors.BadRequest("UPSTREAM_KEY_API_KEY_REQUIRED", "new upstream keys require an api_key")
 	}
 	key.EncryptedAPIKey = strings.TrimSpace(key.EncryptedAPIKey)
 	return nil

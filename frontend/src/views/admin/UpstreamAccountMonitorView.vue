@@ -193,9 +193,9 @@
 
               <span
                 class="flex-shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold"
-                :class="resultStatusPillClass(row)"
+                :class="statusBadgeClass(monitorHealthStatus(row))"
               >
-                {{ resultStatusLabel(row) }}
+                {{ statusLabel(monitorHealthStatus(row)) }}
               </span>
             </header>
 
@@ -209,15 +209,6 @@
               :secondary-value="formatLatency(row.latest_result?.ping_latency_ms)"
               secondary-unit="ms"
             />
-
-            <div class="mt-3 flex flex-wrap gap-1.5">
-              <span class="monitor-chip" :class="resultStatusPillClass(row)">
-                {{ resultStatusLabel(row) }}
-              </span>
-              <span class="monitor-chip" :class="row.monitor_enabled ? enabledPillClass : disabledPillClass">
-                {{ row.monitor_enabled ? t('admin.upstreamAccountMonitor.enabled') : t('admin.upstreamAccountMonitor.disabled') }}
-              </span>
-            </div>
 
             <div class="mt-2.5 flex items-center justify-between gap-2 rounded-lg bg-gray-50 px-2.5 py-1.5 dark:bg-dark-900/30">
               <div class="min-w-0">
@@ -406,6 +397,7 @@ import type {
   UpstreamAccountMonitorItem,
   UpstreamAccountMonitorListParams,
 } from '@/api/admin/upstreamAccountMonitor'
+import type { MonitorStatus } from '@/api/admin/channelMonitor'
 import type { AdminGroup } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -428,7 +420,12 @@ import type { ClaudeModel } from '@/types'
 
 const { t } = useI18n()
 const appStore = useAppStore()
-const { providerBadgeClass, formatLatency } = useChannelMonitorFormat()
+const {
+  providerBadgeClass,
+  formatLatency,
+  statusBadgeClass,
+  statusLabel,
+} = useChannelMonitorFormat()
 
 const items = ref<UpstreamAccountMonitorItem[]>([])
 const groups = ref<AdminGroup[]>([])
@@ -489,8 +486,7 @@ const overallDotClass = computed(() =>
   overallStatus.value === 'operational' ? 'bg-emerald-500' : 'bg-amber-500'
 )
 
-const enabledPillClass = 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
-const disabledPillClass = 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'
+const MONITOR_DEGRADED_LATENCY_MS = 6000
 
 const platformOptions = computed(() => [
   { value: '', label: t('admin.accounts.allPlatforms') },
@@ -816,20 +812,10 @@ function resultStatusVariant(row: UpstreamAccountMonitorItem): 'success' | 'erro
   return row.latest_result.status === 'success' ? 'success' : 'error'
 }
 
-function resultStatusPillClass(row: UpstreamAccountMonitorItem): string {
-  const variant = resultStatusVariant(row)
-  if (variant === 'success') return enabledPillClass
-  if (variant === 'error') return 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300'
-  if (variant === 'warning') return 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'
-  return disabledPillClass
-}
-
-function resultStatusLabel(row: UpstreamAccountMonitorItem): string {
-  if (!row.plan_id) return t('admin.upstreamAccountMonitor.notEnabled')
-  if (!row.latest_result) return t('admin.upstreamAccountMonitor.notChecked')
-  return row.latest_result.status === 'success'
-    ? t('admin.upstreamAccountMonitor.success')
-    : t('admin.upstreamAccountMonitor.failed')
+function monitorHealthStatus(row: UpstreamAccountMonitorItem): MonitorStatus | '' {
+  if (!row.plan_id || !row.latest_result) return ''
+  if (row.latest_result.status !== 'success') return 'failed'
+  return row.latest_result.latency_ms >= MONITOR_DEGRADED_LATENCY_MS ? 'degraded' : 'operational'
 }
 
 function latestError(row: UpstreamAccountMonitorItem): string {
@@ -948,10 +934,6 @@ onUnmounted(() => {
 .checking-spinner {
   @apply h-3.5 w-3.5 rounded-full border-2 border-primary-200 border-t-primary-600 dark:border-primary-500/25 dark:border-t-primary-300;
   animation: checking-spin 0.8s linear infinite;
-}
-
-.monitor-chip {
-  @apply inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium;
 }
 
 @keyframes checking-spin {
