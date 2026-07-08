@@ -32,6 +32,42 @@ make rollback-help
 All release, hotfix, rollback, and production incident work must have a Beads
 issue. Use `bd show <id>` as the durable source of task context.
 
+## Branch Naming Enforcement
+
+Branch names are part of the project contract. Validate branch names before
+creating or renaming branches; do not create temporary exceptions.
+
+Allowed branch forms:
+
+- `feature/<bd-id>-<slug>`
+- `hotfix/<bd-id>-<slug>`
+- `release/vX.Y.Z-prod.N`
+- `codex/sync-vX.Y.Z`
+- `prod`
+- `backup/pre-prod-YYYYMMDD-<sha>`
+- `rollback/prod-YYYYMMDD-<sha>`
+
+For `feature/*` and `hotfix/*` branches:
+
+- `<bd-id>` must be the exact Beads issue id, for example `sub2api-b0m`.
+- `<slug>` must use only lowercase letters, digits, and hyphens.
+- Do not use dots, underscores, spaces, or extra slash segments in the slug.
+- Convert version strings in slugs from dots to hyphens, for example
+  `v0.1.146` becomes `v0-1-146`.
+
+Examples:
+
+```bash
+# Good
+git switch -c feature/sub2api-b0m-enforce-branch-naming prod
+git worktree add -b feature/sub2api-d4z-merge-sync-v0-1-146 ../merge-check codex/upstream-apikey-channel-monitor
+
+# Bad
+git switch -c feature/sub2api-b0m
+git switch -c feature/sub2api-d4z-merge-sync-v0.1.146
+git switch -c codex/my-feature-branch
+```
+
 ## Branch Roles
 
 | Branch | Purpose | Rules |
