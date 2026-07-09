@@ -608,7 +608,7 @@ async function runBatch(action: 'runAll' | 'enableAll' | 'disableAll', request: 
 }
 
 function runAll() {
-  void runBatch('runAll', () => adminAPI.upstreamAccountMonitor.runAll())
+  void runBatch('runAll', () => adminAPI.upstreamAccountMonitor.runAll(currentFilterParams()))
 }
 
 function enableAll() {

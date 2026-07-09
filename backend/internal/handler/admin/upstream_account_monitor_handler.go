@@ -51,7 +51,12 @@ func (h *UpstreamAccountMonitorHandler) DisableAll(c *gin.Context) {
 }
 
 func (h *UpstreamAccountMonitorHandler) RunAll(c *gin.Context) {
-	result, err := h.service.RunAll(c.Request.Context(), service.UpstreamAccountMonitorBatchParams{})
+	params, err := parseUpstreamAccountMonitorBatchParams(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	result, err := h.service.RunAll(c.Request.Context(), params)
 	if err != nil {
 		response.InternalError(c, err.Error())
 		return

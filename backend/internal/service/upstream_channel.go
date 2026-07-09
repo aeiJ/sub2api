@@ -44,6 +44,7 @@ type UpstreamChannelRepository interface {
 
 type UpstreamSyncAdmin interface {
 	CreateGroup(ctx context.Context, input *CreateGroupInput) (*Group, error)
+	UpdateGroup(ctx context.Context, id int64, input *UpdateGroupInput) (*Group, error)
 	CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error)
 	UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error)
 }
@@ -55,7 +56,6 @@ type UpstreamAccountReader interface {
 
 type UpstreamGroupWriter interface {
 	GetByID(ctx context.Context, id int64) (*Group, error)
-	Update(ctx context.Context, group *Group) error
 }
 
 type UpstreamAccountTester interface {
@@ -525,24 +525,11 @@ func (s *UpstreamChannelService) syncPoolGroup(ctx context.Context, channel *Ups
 		if err != nil {
 			return nil, "", err
 		}
-		group.Name = pool.GroupName
-		group.Description = description
-		group.Platform = provider
-		group.RateMultiplier = pool.GroupRateMultiplier
-		group.Status = normalizeStatus(pool.Status)
-		if group.SubscriptionType == "" {
-			group.SubscriptionType = SubscriptionTypeStandard
-		}
-		if group.ImageRateMultiplier < 0 {
-			group.ImageRateMultiplier = 1
-		}
-		if err := s.groupRepo.Update(ctx, group); err != nil {
+		updated, err := s.admin.UpdateGroup(ctx, group.ID, upstreamGroupUpdateInput(group, pool, provider, description))
+		if err != nil {
 			return nil, "", err
 		}
-		if s.authCacheInvalidator != nil {
-			s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, group.ID)
-		}
-		return group, "update_group", nil
+		return updated, "update_group", nil
 	}
 
 	group, err := s.admin.CreateGroup(ctx, &CreateGroupInput{
@@ -557,15 +544,32 @@ func (s *UpstreamChannelService) syncPoolGroup(ctx context.Context, channel *Ups
 		return nil, "", err
 	}
 	if normalizeStatus(pool.Status) != StatusActive {
-		group.Status = normalizeStatus(pool.Status)
-		if err := s.groupRepo.Update(ctx, group); err != nil {
+		updated, err := s.admin.UpdateGroup(ctx, group.ID, upstreamGroupUpdateInput(group, pool, provider, description))
+		if err != nil {
 			return nil, "", err
 		}
-		if s.authCacheInvalidator != nil {
-			s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, group.ID)
-		}
+		group = updated
 	}
 	return group, "create_group", nil
+}
+
+func upstreamGroupUpdateInput(group *Group, pool *UpstreamKeyPool, provider string, description string) *UpdateGroupInput {
+	subscriptionType := group.SubscriptionType
+	if subscriptionType == "" {
+		subscriptionType = SubscriptionTypeStandard
+	}
+	rateMultiplier := pool.GroupRateMultiplier
+	return &UpdateGroupInput{
+		Name:             pool.GroupName,
+		Description:      &description,
+		Platform:         provider,
+		RateMultiplier:   &rateMultiplier,
+		Status:           normalizeStatus(pool.Status),
+		SubscriptionType: subscriptionType,
+		DailyLimitUSD:    group.DailyLimitUSD,
+		WeeklyLimitUSD:   group.WeeklyLimitUSD,
+		MonthlyLimitUSD:  group.MonthlyLimitUSD,
+	}
 }
 
 func (s *UpstreamChannelService) syncKeyAccount(ctx context.Context, channel *UpstreamChannel, platform *UpstreamPlatform, pool *UpstreamKeyPool, key *UpstreamKey, groupID int64) (*Account, string, []string, error) {

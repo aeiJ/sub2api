@@ -848,6 +848,7 @@ type fakeUpstreamAdmin struct {
 	nextAccountID      int64
 	accounts           map[int64]*Account
 	createGroupCalls   int
+	updateGroupCalls   int
 	createAccountCalls int
 	updateAccountCalls int
 }
@@ -874,6 +875,34 @@ func (a *fakeUpstreamAdmin) CreateGroup(_ context.Context, input *CreateGroupInp
 		SubscriptionType: SubscriptionTypeStandard,
 	}
 	a.groups.items[id] = group
+	cp := *group
+	return &cp, nil
+}
+
+func (a *fakeUpstreamAdmin) UpdateGroup(_ context.Context, id int64, input *UpdateGroupInput) (*Group, error) {
+	a.updateGroupCalls++
+	group := a.groups.items[id]
+	if group == nil {
+		return nil, ErrGroupNotFound
+	}
+	if input.Name != "" {
+		group.Name = input.Name
+	}
+	if input.Description != nil {
+		group.Description = *input.Description
+	}
+	if input.Platform != "" {
+		group.Platform = input.Platform
+	}
+	if input.RateMultiplier != nil {
+		group.RateMultiplier = *input.RateMultiplier
+	}
+	if input.Status != "" {
+		group.Status = input.Status
+	}
+	if input.SubscriptionType != "" {
+		group.SubscriptionType = input.SubscriptionType
+	}
 	cp := *group
 	return &cp, nil
 }

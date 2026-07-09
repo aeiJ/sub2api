@@ -334,6 +334,28 @@ func TestUpstreamAccountMonitorEnableAllIgnoresFilters(t *testing.T) {
 	require.Zero(t, accountRepo.calls[0].GroupID)
 }
 
+func TestUpstreamAccountMonitorRunAllAppliesFiltersToAccountQuery(t *testing.T) {
+	ctx := context.Background()
+	groupOne := &Group{ID: 1, Name: "group-one"}
+	groupTwo := &Group{ID: 2, Name: "group-two"}
+	accountOne := Account{ID: 1, Name: "openai-one", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive, Groups: []*Group{groupOne}}
+	accountTwo := Account{ID: 2, Name: "openai-two", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive, Groups: []*Group{groupTwo}}
+	accountRepo := &upstreamMonitorAccountRepo{accounts: []Account{accountOne, accountTwo}}
+	svc := NewUpstreamAccountMonitorService(
+		accountRepo,
+		newUpstreamMonitorPlanRepo(),
+		&upstreamMonitorResultRepo{},
+		nil,
+	)
+
+	resp, err := svc.RunAll(ctx, UpstreamAccountMonitorBatchParams{GroupID: 999})
+
+	require.NoError(t, err)
+	require.Zero(t, resp.Total)
+	require.NotEmpty(t, accountRepo.calls)
+	require.Equal(t, int64(999), accountRepo.calls[0].GroupID)
+}
+
 func TestUpstreamAccountMonitorDisableAllSkipsSchedulableAccounts(t *testing.T) {
 	ctx := context.Background()
 	schedulable := Account{ID: 1, Name: "openai-one", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true}

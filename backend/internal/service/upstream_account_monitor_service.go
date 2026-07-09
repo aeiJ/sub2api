@@ -380,7 +380,7 @@ func (s *UpstreamAccountMonitorService) UpdateSettings(ctx context.Context, acco
 }
 
 func (s *UpstreamAccountMonitorService) RunAll(ctx context.Context, params UpstreamAccountMonitorBatchParams) (*UpstreamAccountMonitorBatchResponse, error) {
-	accounts, err := s.listAllAPIKeyAccounts(ctx, UpstreamAccountMonitorBatchParams{})
+	accounts, err := s.listAllAPIKeyAccounts(ctx, params)
 	if err != nil {
 		return nil, err
 	}
