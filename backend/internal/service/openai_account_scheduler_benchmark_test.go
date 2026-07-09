@@ -42,10 +42,11 @@ func BenchmarkOpenAIDedicatedSelectionOrder(b *testing.B) {
 
 	for _, tc := range cases {
 		candidates := buildOpenAISchedulerBenchmarkCandidates(tc.size)
+		req := OpenAIAccountScheduleRequest{SessionHash: "benchmark_session_seed"}
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				result := sortOpenAIDedicatedSelectionOrder(candidates)
+				result := buildOpenAIWeightedSelectionOrder(candidates, req)
 				if len(result) == 0 {
 					b.Fatal("unexpected empty result")
 				}
