@@ -555,6 +555,18 @@ func ProvideAPIKeyService(
 	return svc
 }
 
+func ProvideUpstreamSyncAdmin(admin AdminService) UpstreamSyncAdmin {
+	return admin
+}
+
+func ProvideUpstreamAccountReader(accountRepo AccountRepository) UpstreamAccountReader {
+	return accountRepo
+}
+
+func ProvideUpstreamGroupWriter(groupRepo GroupRepository) UpstreamGroupWriter {
+	return groupRepo
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	// Core services
@@ -571,6 +583,7 @@ var ProviderSet = wire.NewSet(
 	NewDashboardService,
 	ProvidePricingService,
 	NewBillingService,
+	NewModelMarketplaceService,
 	ProvideBillingCacheService,
 	NewAnnouncementService,
 	NewAdminService,
@@ -649,6 +662,11 @@ var ProviderSet = wire.NewSet(
 	ProvideScheduledTestRunnerService,
 	NewGroupCapacityService,
 	NewChannelService,
+	ProvideUpstreamSyncAdmin,
+	ProvideUpstreamAccountReader,
+	ProvideUpstreamGroupWriter,
+	NewUpstreamChannelService,
+	ProvideUpstreamAccountMonitorService,
 	NewModelPricingResolver,
 	NewContentModerationService,
 	NewAffiliateService,

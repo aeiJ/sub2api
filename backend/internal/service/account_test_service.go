@@ -1790,6 +1790,18 @@ func (s *AccountTestService) sendErrorAndEnd(c *gin.Context, errorMsg string) er
 // RunTestBackground executes an account test in-memory (no real HTTP client),
 // capturing SSE output via httptest.NewRecorder, then parses the result.
 func (s *AccountTestService) RunTestBackground(ctx context.Context, accountID int64, modelID string) (*ScheduledTestResult, error) {
+	return s.runTestBackground(ctx, accountID, modelID, false)
+}
+
+func (s *AccountTestService) RunTestBackgroundWithEndpointPing(ctx context.Context, accountID int64, modelID string) (*ScheduledTestResult, error) {
+	return s.runTestBackground(ctx, accountID, modelID, true)
+}
+
+func (s *AccountTestService) runTestBackground(ctx context.Context, accountID int64, modelID string, includeEndpointPing bool) (*ScheduledTestResult, error) {
+	var pingLatencyMs *int64
+	if includeEndpointPing {
+		pingLatencyMs = s.pingAccountEndpoint(ctx, accountID)
+	}
 	startedAt := time.Now()
 
 	w := httptest.NewRecorder()
@@ -1811,13 +1823,79 @@ func (s *AccountTestService) RunTestBackground(ctx context.Context, accountID in
 	}
 
 	return &ScheduledTestResult{
-		Status:       status,
-		ResponseText: responseText,
-		ErrorMessage: errMsg,
-		LatencyMs:    finishedAt.Sub(startedAt).Milliseconds(),
-		StartedAt:    startedAt,
-		FinishedAt:   finishedAt,
+		Status:        status,
+		ResponseText:  responseText,
+		ErrorMessage:  errMsg,
+		LatencyMs:     finishedAt.Sub(startedAt).Milliseconds(),
+		PingLatencyMs: pingLatencyMs,
+		StartedAt:     startedAt,
+		FinishedAt:    finishedAt,
 	}, nil
+}
+
+func (s *AccountTestService) pingAccountEndpoint(ctx context.Context, accountID int64) *int64 {
+	if s == nil || s.accountRepo == nil {
+		return nil
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil || account == nil {
+		return nil
+	}
+	return pingUpstreamAccountEndpointOrigin(ctx, accountMonitorPingEndpoint(account))
+}
+
+func pingUpstreamAccountEndpointOrigin(ctx context.Context, endpoint string) *int64 {
+	origin, err := extractOrigin(endpoint)
+	if err != nil || origin == "" {
+		return nil
+	}
+
+	if ping, fallback := pingUpstreamAccountEndpointOriginWithMethod(ctx, origin, http.MethodHead); ping != nil && !fallback {
+		return ping
+	}
+	ping, _ := pingUpstreamAccountEndpointOriginWithMethod(ctx, origin, http.MethodGet)
+	return ping
+}
+
+func pingUpstreamAccountEndpointOriginWithMethod(ctx context.Context, origin string, method string) (*int64, bool) {
+	req, err := http.NewRequestWithContext(ctx, method, origin, nil)
+	if err != nil {
+		return nil, true
+	}
+	start := time.Now()
+	resp, err := monitorPingHTTPClient.Do(req)
+	if err != nil {
+		return nil, true
+	}
+	if resp.Body != nil {
+		defer func() { _ = resp.Body.Close() }()
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, monitorPingDiscardMaxBytes))
+	}
+	ms := time.Since(start).Milliseconds()
+	return &ms, upstreamPingShouldFallback(method, resp.StatusCode)
+}
+
+func upstreamPingShouldFallback(method string, statusCode int) bool {
+	if method != http.MethodHead {
+		return false
+	}
+	return statusCode == http.StatusMethodNotAllowed || statusCode == http.StatusNotImplemented
+}
+
+func accountMonitorPingEndpoint(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	switch account.Platform {
+	case PlatformOpenAI:
+		return account.GetOpenAIBaseURL()
+	case PlatformGemini:
+		return account.GetGeminiBaseURL(geminicli.AIStudioBaseURL)
+	case PlatformGrok:
+		return account.GetGrokBaseURL()
+	default:
+		return account.GetBaseURL()
+	}
 }
 
 // parseTestSSEOutput extracts response text and error message from captured SSE output.

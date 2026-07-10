@@ -125,11 +125,14 @@ scripts
 #openspec/
 code-reviews/
 AGENTS.md
+!AGENTS.md
 backend/cmd/server/server
 deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+!docs/OFFLINE_REBUILD_RUN_CN.md
+!docs/git-branch-management.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
@@ -140,3 +143,9 @@ docs/*
 frontend/coverage/
 aicodex
 output/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/

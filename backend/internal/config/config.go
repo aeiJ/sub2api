@@ -29,7 +29,7 @@ const (
 
 // DefaultCSPPolicy is the default Content-Security-Policy with nonce support
 // __CSP_NONCE__ will be replaced with actual nonce at request time by the SecurityHeaders middleware
-const DefaultCSPPolicy = "default-src 'self'; script-src 'self' __CSP_NONCE__ https://challenges.cloudflare.com https://static.cloudflareinsights.com https://*.stripe.com https://static.airwallex.com https://checkout.airwallex.com https://static-demo.airwallex.com https://checkout-demo.airwallex.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://static.airwallex.com https://checkout.airwallex.com https://static-demo.airwallex.com https://checkout-demo.airwallex.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https:; frame-src https://challenges.cloudflare.com https://*.stripe.com https://checkout.airwallex.com https://checkout-demo.airwallex.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+const DefaultCSPPolicy = "default-src 'self'; script-src 'self' __CSP_NONCE__ https://challenges.cloudflare.com https://static.cloudflareinsights.com https://*.stripe.com https://static.airwallex.com https://checkout.airwallex.com https://static-demo.airwallex.com https://checkout-demo.airwallex.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://static.airwallex.com https://checkout.airwallex.com https://static-demo.airwallex.com https://checkout-demo.airwallex.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https:; frame-src https://challenges.cloudflare.com https://*.stripe.com https://checkout.airwallex.com https://checkout-demo.airwallex.com https://pay.ldxp.cn; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
 // UMQ（用户消息队列）模式常量
 const (
@@ -1033,6 +1033,18 @@ type GatewayOpenAISchedulerConfig struct {
 	StickyEscapeTTFTMs int `mapstructure:"sticky_escape_ttft_ms"`
 	// StickyEscapeErrorRate: 错误率 EWMA 超过该阈值时跳过 sticky
 	StickyEscapeErrorRate float64 `mapstructure:"sticky_escape_error_rate"`
+	// LatencyDegradeTTFTMs: TTFT EWMA 达到该阈值后对新会话软降权
+	LatencyDegradeTTFTMs int `mapstructure:"latency_degrade_ttft_ms"`
+	// LatencyRecoverTTFTMs: TTFT EWMA 降至该阈值并连续成功后恢复正常权重
+	LatencyRecoverTTFTMs int `mapstructure:"latency_recover_ttft_ms"`
+	// LatencySevereTTFTMs: TTFT EWMA 达到该阈值后允许 sticky 逃逸
+	LatencySevereTTFTMs int `mapstructure:"latency_severe_ttft_ms"`
+	// LatencyMinSamples: 延迟状态生效前需要的最小样本数
+	LatencyMinSamples int `mapstructure:"latency_min_samples"`
+	// LatencyRecoverySuccesses: 从降权状态恢复正常需要的连续成功次数
+	LatencyRecoverySuccesses int `mapstructure:"latency_recovery_successes"`
+	// LatencySevereErrorRate: 错误率 EWMA 超过该阈值时判定为严重状态
+	LatencySevereErrorRate float64 `mapstructure:"latency_severe_error_rate"`
 }
 
 // GatewayUsageRecordConfig 使用量记录异步队列配置
@@ -1468,11 +1480,29 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config error: %w", err)
 	}
-	if cfg.Gateway.OpenAIScheduler.StickyEscapeTTFTMs == 0 {
+	if cfg.Gateway.OpenAIScheduler.StickyEscapeTTFTMs == 0 && !viper.IsSet("gateway.openai_scheduler.sticky_escape_ttft_ms") {
 		cfg.Gateway.OpenAIScheduler.StickyEscapeTTFTMs = 15000
 	}
-	if cfg.Gateway.OpenAIScheduler.StickyEscapeErrorRate == 0 {
+	if cfg.Gateway.OpenAIScheduler.StickyEscapeErrorRate == 0 && !viper.IsSet("gateway.openai_scheduler.sticky_escape_error_rate") {
 		cfg.Gateway.OpenAIScheduler.StickyEscapeErrorRate = 0.5
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs == 0 && !viper.IsSet("gateway.openai_scheduler.latency_degrade_ttft_ms") {
+		cfg.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs = 8000
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs == 0 && !viper.IsSet("gateway.openai_scheduler.latency_recover_ttft_ms") {
+		cfg.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs = 6000
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencySevereTTFTMs == 0 && !viper.IsSet("gateway.openai_scheduler.latency_severe_ttft_ms") {
+		cfg.Gateway.OpenAIScheduler.LatencySevereTTFTMs = 20000
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencyMinSamples == 0 && !viper.IsSet("gateway.openai_scheduler.latency_min_samples") {
+		cfg.Gateway.OpenAIScheduler.LatencyMinSamples = 3
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencyRecoverySuccesses == 0 && !viper.IsSet("gateway.openai_scheduler.latency_recovery_successes") {
+		cfg.Gateway.OpenAIScheduler.LatencyRecoverySuccesses = 2
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencySevereErrorRate == 0 && !viper.IsSet("gateway.openai_scheduler.latency_severe_error_rate") {
+		cfg.Gateway.OpenAIScheduler.LatencySevereErrorRate = 0.5
 	}
 	if !cfg.Gateway.OpenAIScheduler.StickyEscapeEnabled && !viper.IsSet("gateway.openai_scheduler.sticky_escape_enabled") {
 		cfg.Gateway.OpenAIScheduler.StickyEscapeEnabled = true
@@ -2851,6 +2881,36 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIScheduler.StickyEscapeErrorRate < 0 || c.Gateway.OpenAIScheduler.StickyEscapeErrorRate > 1 {
 		return fmt.Errorf("gateway.openai_scheduler.sticky_escape_error_rate must be between 0 and 1")
+	}
+	if c.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs <= 0 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_degrade_ttft_ms must be positive")
+	}
+	if c.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs <= 0 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_recover_ttft_ms must be positive")
+	}
+	if c.Gateway.OpenAIScheduler.LatencySevereTTFTMs <= 0 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_severe_ttft_ms must be positive")
+	}
+	if c.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs >= c.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs {
+		return fmt.Errorf("gateway.openai_scheduler.latency_recover_ttft_ms must be less than latency_degrade_ttft_ms")
+	}
+	if c.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs-c.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs < 1000 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_degrade_ttft_ms and latency_recover_ttft_ms must have at least 1000ms gap for hysteresis")
+	}
+	if c.Gateway.OpenAIScheduler.LatencySevereTTFTMs < c.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs {
+		return fmt.Errorf("gateway.openai_scheduler.latency_severe_ttft_ms must be greater than or equal to latency_degrade_ttft_ms")
+	}
+	if c.Gateway.OpenAIScheduler.LatencyMinSamples <= 0 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_min_samples must be positive")
+	}
+	if c.Gateway.OpenAIScheduler.LatencyMinSamples > 100 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_min_samples must not exceed 100")
+	}
+	if c.Gateway.OpenAIScheduler.LatencyRecoverySuccesses <= 0 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_recovery_successes must be positive")
+	}
+	if c.Gateway.OpenAIScheduler.LatencySevereErrorRate <= 0 || c.Gateway.OpenAIScheduler.LatencySevereErrorRate > 1 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_severe_error_rate must be greater than 0 and less than or equal to 1")
 	}
 	if c.Gateway.MaxLineSize < 0 {
 		return fmt.Errorf("gateway.max_line_size must be non-negative")

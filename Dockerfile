@@ -18,7 +18,7 @@ ARG NPM_CONFIG_REGISTRY=
 # -----------------------------------------------------------------------------
 # Stage 1: Frontend Builder
 # -----------------------------------------------------------------------------
-FROM ${NODE_IMAGE} AS frontend-builder
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend-builder
 ARG NPM_CONFIG_REGISTRY
 
 WORKDIR /app/frontend
@@ -44,7 +44,7 @@ RUN pnpm run build
 # -----------------------------------------------------------------------------
 # Stage 2: Backend Builder
 # -----------------------------------------------------------------------------
-FROM ${GOLANG_IMAGE} AS backend-builder
+FROM --platform=$BUILDPLATFORM ${GOLANG_IMAGE} AS backend-builder
 
 # Build arguments for version info (set by CI)
 ARG VERSION=
@@ -52,6 +52,8 @@ ARG COMMIT=docker
 ARG DATE
 ARG GOPROXY
 ARG GOSUMDB
+ARG TARGETOS=linux
+ARG TARGETARCH
 
 ENV GOPROXY=${GOPROXY}
 ENV GOSUMDB=${GOSUMDB}
@@ -75,8 +77,9 @@ COPY --from=frontend-builder /app/backend/internal/web/dist ./internal/web/dist
 # Version precedence: build arg VERSION > exact git tag > cmd/server/VERSION
 RUN VERSION_VALUE="${VERSION}" && \
     if [ -z "${VERSION_VALUE}" ]; then VERSION_VALUE="$(./scripts/resolve-version.sh)"; fi && \
+    TARGET_ARCH="${TARGETARCH:-$(go env GOARCH)}" && \
     DATE_VALUE="${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
-    CGO_ENABLED=0 GOOS=linux go build \
+    CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGET_ARCH}" go build \
     -tags embed \
     -ldflags="-s -w -X main.Version=${VERSION_VALUE} -X main.Commit=${COMMIT} -X main.Date=${DATE_VALUE} -X main.BuildType=release" \
     -trimpath \
@@ -86,12 +89,12 @@ RUN VERSION_VALUE="${VERSION}" && \
 # -----------------------------------------------------------------------------
 # Stage 3: PostgreSQL Client (version-matched with docker-compose)
 # -----------------------------------------------------------------------------
-FROM ${POSTGRES_IMAGE} AS pg-client
+FROM --platform=$TARGETPLATFORM ${POSTGRES_IMAGE} AS pg-client
 
 # -----------------------------------------------------------------------------
 # Stage 4: Final Runtime Image
 # -----------------------------------------------------------------------------
-FROM ${ALPINE_IMAGE}
+FROM --platform=$TARGETPLATFORM ${ALPINE_IMAGE}
 
 # Labels
 LABEL maintainer="Wei-Shaw <github.com/Wei-Shaw>"

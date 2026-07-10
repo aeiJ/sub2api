@@ -62,6 +62,7 @@ func (h *ScheduledTestHandler) Create(c *gin.Context) {
 
 	plan := &service.ScheduledTestPlan{
 		AccountID:      req.AccountID,
+		Purpose:        service.ScheduledTestPlanPurposeScheduledTest,
 		ModelID:        req.ModelID,
 		CronExpression: req.CronExpression,
 		Enabled:        true,
@@ -95,6 +96,10 @@ func (h *ScheduledTestHandler) Update(c *gin.Context) {
 		response.NotFound(c, "plan not found")
 		return
 	}
+	if existing.Purpose != service.ScheduledTestPlanPurposeScheduledTest {
+		response.NotFound(c, "plan not found")
+		return
+	}
 
 	var req updateScheduledTestPlanRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -117,7 +122,6 @@ func (h *ScheduledTestHandler) Update(c *gin.Context) {
 	if req.AutoRecover != nil {
 		existing.AutoRecover = *req.AutoRecover
 	}
-
 	updated, err := h.scheduledTestSvc.UpdatePlan(c.Request.Context(), existing)
 	if err != nil {
 		response.BadRequest(c, err.Error())
@@ -133,6 +137,11 @@ func (h *ScheduledTestHandler) Delete(c *gin.Context) {
 		response.BadRequest(c, "invalid plan id")
 		return
 	}
+	existing, err := h.scheduledTestSvc.GetPlan(c.Request.Context(), planID)
+	if err != nil || existing.Purpose != service.ScheduledTestPlanPurposeScheduledTest {
+		response.NotFound(c, "plan not found")
+		return
+	}
 
 	if err := h.scheduledTestSvc.DeletePlan(c.Request.Context(), planID); err != nil {
 		response.InternalError(c, err.Error())
@@ -146,6 +155,11 @@ func (h *ScheduledTestHandler) ListResults(c *gin.Context) {
 	planID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "invalid plan id")
+		return
+	}
+	existing, err := h.scheduledTestSvc.GetPlan(c.Request.Context(), planID)
+	if err != nil || existing.Purpose != service.ScheduledTestPlanPurposeScheduledTest {
+		response.NotFound(c, "plan not found")
 		return
 	}
 

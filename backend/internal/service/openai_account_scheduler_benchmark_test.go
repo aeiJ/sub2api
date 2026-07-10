@@ -1,7 +1,6 @@
 package service
 
 import (
-	"sort"
 	"testing"
 )
 
@@ -31,49 +30,23 @@ func buildOpenAISchedulerBenchmarkCandidates(size int) []openAIAccountCandidateS
 	return candidates
 }
 
-func selectTopKOpenAICandidatesBySortBenchmark(candidates []openAIAccountCandidateScore, topK int) []openAIAccountCandidateScore {
-	if len(candidates) == 0 {
-		return nil
-	}
-	if topK <= 0 {
-		topK = 1
-	}
-	ranked := append([]openAIAccountCandidateScore(nil), candidates...)
-	sort.Slice(ranked, func(i, j int) bool {
-		return isOpenAIAccountCandidateBetter(ranked[i], ranked[j])
-	})
-	if topK > len(ranked) {
-		topK = len(ranked)
-	}
-	return ranked[:topK]
-}
-
-func BenchmarkOpenAIAccountSchedulerSelectTopK(b *testing.B) {
+func BenchmarkOpenAIDedicatedSelectionOrder(b *testing.B) {
 	cases := []struct {
 		name string
 		size int
-		topK int
 	}{
-		{name: "n_16_k_3", size: 16, topK: 3},
-		{name: "n_64_k_3", size: 64, topK: 3},
-		{name: "n_256_k_5", size: 256, topK: 5},
+		{name: "n_16", size: 16},
+		{name: "n_64", size: 64},
+		{name: "n_256", size: 256},
 	}
 
 	for _, tc := range cases {
 		candidates := buildOpenAISchedulerBenchmarkCandidates(tc.size)
-		b.Run(tc.name+"/heap_topk", func(b *testing.B) {
+		req := OpenAIAccountScheduleRequest{SessionHash: "benchmark_session_seed"}
+		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				result := selectTopKOpenAICandidates(candidates, tc.topK)
-				if len(result) == 0 {
-					b.Fatal("unexpected empty result")
-				}
-			}
-		})
-		b.Run(tc.name+"/full_sort", func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				result := selectTopKOpenAICandidatesBySortBenchmark(candidates, tc.topK)
+				result := buildOpenAIWeightedSelectionOrder(candidates, req)
 				if len(result) == 0 {
 					b.Fatal("unexpected empty result")
 				}

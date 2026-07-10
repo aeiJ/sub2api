@@ -9,6 +9,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const defaultErrorPassthroughCustomMessage = "Upstream request failed"
+
 // ErrorPassthroughHandler 处理错误透传规则的 HTTP 请求
 type ErrorPassthroughHandler struct {
 	service *service.ErrorPassthroughService
@@ -122,13 +124,17 @@ func (h *ErrorPassthroughHandler) Create(c *gin.Context) {
 	if req.PassthroughBody != nil {
 		rule.PassthroughBody = *req.PassthroughBody
 	} else {
-		rule.PassthroughBody = true
+		rule.PassthroughBody = false
 	}
 	if req.SkipMonitoring != nil {
 		rule.SkipMonitoring = *req.SkipMonitoring
 	}
 	rule.ResponseCode = req.ResponseCode
 	rule.CustomMessage = req.CustomMessage
+	if !rule.PassthroughBody && rule.CustomMessage == nil {
+		msg := defaultErrorPassthroughCustomMessage
+		rule.CustomMessage = &msg
+	}
 	rule.Description = req.Description
 
 	// 确保切片不为 nil

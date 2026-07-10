@@ -2007,11 +2007,14 @@ export interface TotpLogin2FARequest {
 export interface ScheduledTestPlan {
   id: number
   account_id: number
+  purpose: string
   model_id: string
   cron_expression: string
+  interval_minutes: number
   enabled: boolean
   max_results: number
   auto_recover: boolean
+  jitter_seconds: number
   last_run_at: string | null
   next_run_at: string | null
   created_at: string

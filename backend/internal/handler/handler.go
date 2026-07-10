@@ -32,6 +32,8 @@ type AdminHandlers struct {
 	APIKey                 *admin.AdminAPIKeyHandler
 	ScheduledTest          *admin.ScheduledTestHandler
 	Channel                *admin.ChannelHandler
+	UpstreamChannel        *admin.UpstreamChannelHandler
+	UpstreamAccountMonitor *admin.UpstreamAccountMonitorHandler
 	ChannelMonitor         *admin.ChannelMonitorHandler
 	ChannelMonitorTemplate *admin.ChannelMonitorRequestTemplateHandler
 	ContentModeration      *admin.ContentModerationHandler
@@ -58,6 +60,7 @@ type Handlers struct {
 	Payment          *PaymentHandler
 	PaymentWebhook   *PaymentWebhookHandler
 	AvailableChannel *AvailableChannelHandler
+	ModelMarketplace *ModelMarketplaceHandler
 	BatchImage       *BatchImageHandler
 }
 

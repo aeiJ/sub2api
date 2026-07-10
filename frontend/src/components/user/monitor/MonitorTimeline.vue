@@ -1,10 +1,12 @@
 <template>
-  <div class="mt-4 pt-3 border-t border-gray-100 dark:border-dark-700/60">
+  <div class="mt-4 min-w-0 max-w-full overflow-hidden pt-3 border-t border-gray-100 dark:border-dark-700/60">
     <div
-      class="flex justify-between text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-2"
+      class="flex min-w-0 justify-between gap-3 text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-2"
     >
-      <span>{{ t('monitorCommon.history60pts', { n: length }) }}</span>
-      <span class="tabular-nums">{{ t('monitorCommon.nextUpdateIn', { n: countdownSeconds }) }}</span>
+      <span class="min-w-0 truncate">{{ t('monitorCommon.history60pts', { n: length }) }}</span>
+      <span class="max-w-[45%] flex-shrink-0 truncate tabular-nums">
+        {{ t('monitorCommon.nextUpdateIn', { n: countdownSeconds }) }}
+      </span>
     </div>
 
     <div
@@ -13,11 +15,15 @@
     >
       {{ t('monitorCommon.maintenancePaused') }}
     </div>
-    <div v-else class="flex items-end gap-[2px] h-5 w-full">
+    <div
+      v-else
+      class="grid h-5 w-full max-w-full items-end gap-[2px] overflow-hidden"
+      :style="{ gridTemplateColumns: `repeat(${length}, minmax(0, 1fr))` }"
+    >
       <div
         v-for="(bar, idx) in displayBars"
         :key="idx"
-        class="flex-1 min-w-[3px] rounded-sm"
+        class="min-w-0 rounded-sm"
         :class="bar.colorClass"
         :style="{ height: bar.heightPct + '%' }"
         :title="bar.title"

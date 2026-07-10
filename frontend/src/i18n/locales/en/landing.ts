@@ -1,4 +1,65 @@
 export default {
+  modelMarketplace: {
+    title: 'Model Marketplace',
+    publicCatalog: 'Public model catalog',
+    subtitle: 'Browse schedulable models, public groups, and reference prices calculated with the lowest public rate.',
+    searchPlaceholder: 'Search models, providers, or groups',
+    resultCount: '{count} models',
+    gridView: 'Cards',
+    copyModel: 'Copy model name',
+    copyFailed: 'Copy failed. Please copy the model name manually.',
+    defaultDescription: 'An AI model available through public groups.',
+    emptyTitle: 'No models to show',
+    emptyDescription: 'Adjust search or filters, or check again later.',
+    errorTitle: 'Failed to load model marketplace',
+    errorMessage: 'Model marketplace data is temporarily unavailable',
+    retry: 'Retry',
+    rate: 'Lowest rate {rate}',
+    summary: {
+      models: 'Models',
+      providers: 'Providers',
+      minRate: 'Min rate'
+    },
+    filters: {
+      title: 'Filters',
+      active: '{count} selected',
+      close: 'Close filters',
+      reset: 'Reset',
+      none: 'No options',
+      providers: 'Providers',
+      groups: 'Public groups',
+      billingModes: 'Billing',
+      tags: 'Tags',
+      platforms: 'Endpoint types'
+    },
+    pricing: {
+      input: 'Input',
+      output: 'Output',
+      cacheWrite: 'Cache write',
+      cacheRead: 'Cached input',
+      imageOutput: 'Image output',
+      perRequest: 'Per request',
+      formula: 'Calculated as official base price x lowest public group rate {rate}',
+      units: {
+        perMillionTokens: 'Discounted price / 1M tokens',
+        perMillionImageTokens: 'Discounted price / 1M image tokens',
+        perRequest: 'Discounted price / request'
+      }
+    },
+    billingModes: {
+      token: 'Token',
+      image: 'Image',
+      per_request: 'Per request'
+    },
+    tags: {
+      reasoning: 'Reasoning',
+      tools: 'Tools',
+      vision: 'Vision',
+      files: 'Files',
+      image: 'Image',
+      context: 'Long context'
+    }
+  },
   batchImageGuide: {
     title: 'Batch Image Generation',
     description: 'Submit multiple prompts in one job and download the generated images when complete'
@@ -12,6 +73,7 @@ export default {
     switchToDark: 'Switch to Dark Mode',
     dashboard: 'Dashboard',
     login: 'Login',
+    modelMarketplace: 'Models',
     getStarted: 'Get Started',
     goToDashboard: 'Go to Dashboard',
     // User-focused value proposition

@@ -31,15 +31,6 @@ const routes: RouteRecordRaw[] = [
 
   // ==================== Public Routes ====================
   {
-    path: '/home',
-    name: 'Home',
-    component: () => import('@/views/HomeView.vue'),
-    meta: {
-      requiresAuth: false,
-      title: 'Home'
-    }
-  },
-  {
     path: '/login',
     name: 'Login',
     component: () => import('@/views/auth/LoginView.vue'),
@@ -167,6 +158,16 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/models',
+    name: 'ModelMarketplace',
+    component: () => import('@/views/ModelMarketplaceView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Model Marketplace',
+      titleKey: 'modelMarketplace.title'
+    }
+  },
+  {
     path: '/legal/:documentId',
     name: 'LegalDocument',
     component: () => import('@/views/public/LegalDocumentView.vue'),
@@ -179,7 +180,13 @@ const routes: RouteRecordRaw[] = [
   // ==================== User Routes ====================
   {
     path: '/',
-    redirect: '/home'
+    name: 'Home',
+    component: () => import('@/views/HomeView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Home',
+      titleKey: 'home.title'
+    }
   },
   {
     path: '/dashboard',
@@ -301,6 +308,17 @@ const routes: RouteRecordRaw[] = [
       titleKey: 'nav.buySubscription',
       descriptionKey: 'purchase.description',
       requiresPayment: true
+    }
+  },
+  {
+    path: '/recharge-center',
+    name: 'RechargeCenter',
+    component: () => import('@/views/user/RechargeCenterView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Recharge Center',
+      titleKey: 'nav.rechargeCenter'
     }
   },
   {
@@ -466,6 +484,34 @@ const routes: RouteRecordRaw[] = [
       titleKey: 'admin.channelMonitor.title',
       descriptionKey: 'admin.channelMonitor.description'
     }
+  },
+  {
+    path: '/admin/upstreams',
+    name: 'AdminUpstreamChannels',
+    component: () => import('@/views/admin/UpstreamChannelsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Upstream Management',
+      titleKey: 'admin.upstreamChannels.title',
+      descriptionKey: 'admin.upstreamChannels.description'
+    }
+  },
+  {
+    path: '/admin/upstreams/monitor',
+    name: 'AdminUpstreamAccountMonitor',
+    component: () => import('@/views/admin/UpstreamAccountMonitorView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Upstream Account Monitor',
+      titleKey: 'admin.upstreamAccountMonitor.title',
+      descriptionKey: 'admin.upstreamAccountMonitor.description'
+    }
+  },
+  {
+    path: '/admin/channels/upstreams',
+    redirect: '/admin/upstreams'
   },
   {
     path: '/monitor',
@@ -703,7 +749,7 @@ let authInitialized = false
 const navigationLoading = useNavigationLoadingState()
 // 延迟初始化预加载，传入 router 实例
 let routePrefetch: ReturnType<typeof useRoutePrefetch> | null = null
-const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/setup', '/payment/result', '/payment/airwallex', '/legal']
+const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/models', '/setup', '/payment/result', '/payment/airwallex', '/legal']
 const BACKEND_MODE_CALLBACK_PATHS = [
   '/auth/callback',
   '/auth/linuxdo/callback',
@@ -716,6 +762,10 @@ const BACKEND_MODE_CALLBACK_PATHS = [
 const BACKEND_MODE_PENDING_AUTH_PATHS = ['/register', '/email-verify']
 
 function isBackendModePublicRouteAllowed(path: string, hasPendingAuthSession: boolean): boolean {
+  if (path === '/') {
+    return true
+  }
+
   if (BACKEND_MODE_ALLOWED_PATHS.some((allowedPath) => path === allowedPath || path.startsWith(allowedPath))) {
     return true
   }

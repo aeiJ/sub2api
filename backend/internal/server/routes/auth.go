@@ -217,6 +217,12 @@ func RegisterAuthRoutes(
 		settings.GET("/email-unsubscribe", h.Setting.UnsubscribeNotificationEmail)
 	}
 
+	// 公开模型广场（无需认证）
+	models := v1.Group("/models")
+	{
+		models.GET("/marketplace", h.ModelMarketplace.List)
+	}
+
 	// 需要认证的当前用户信息
 	authenticated := v1.Group("")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))

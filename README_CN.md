@@ -219,6 +219,11 @@ Nginx 默认会丢弃名称中含下划线的请求头（如 `session_id`），�
 
 ## 部署方式
 
+本仓库的生产分支管理与回滚规则见
+[`docs/git-branch-management.md`](docs/git-branch-management.md)。生产入口固定为
+`prod`，发布前先验证 `release/*` 候选分支和镜像；生产故障优先切回上一个已验证
+Docker 镜像 tag。
+
 ### 方式一：脚本安装（推荐）
 
 一键安装脚本，自动从 GitHub Releases 下载预编译的二进制文件。

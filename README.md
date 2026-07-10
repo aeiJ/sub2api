@@ -215,6 +215,12 @@ Nginx drops headers containing underscores by default (e.g. `session_id`), which
 
 ## Deployment
 
+Production branch management and rollback rules for this repository are
+documented in [`docs/git-branch-management.md`](docs/git-branch-management.md).
+Use `prod` as the fixed production branch, validate release candidates before
+moving it, and roll back production through the previous verified Docker image
+tag first.
+
 ### Method 1: Script Installation (Recommended)
 
 One-click installation script that downloads pre-built binaries from GitHub Releases.

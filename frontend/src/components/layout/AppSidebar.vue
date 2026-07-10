@@ -196,6 +196,7 @@ import VersionBadge from '@/components/common/VersionBadge.vue'
 import { sanitizeSvg } from '@/utils/sanitize'
 import { sanitizeUrl } from '@/utils/url'
 import { FeatureFlags, makeSidebarFlag } from '@/utils/featureFlags'
+import { applyThemeClass } from '@/utils/theme'
 import { useBatchImageAccess } from '@/composables/useBatchImageAccess'
 
 interface NavItem {
@@ -706,6 +707,7 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
     { path: '/available-channels', label: t('nav.availableChannels'), icon: ChannelIcon, hideInSimpleMode: true, featureFlag: flagAvailableChannels },
     { path: '/monitor', label: t('nav.channelStatus'), icon: SignalIcon, featureFlag: flagChannelMonitor },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
+    { path: '/recharge-center', label: t('nav.rechargeCenter'), icon: RechargeSubscriptionIcon, hideInSimpleMode: true },
     { path: '/purchase', label: t('nav.buySubscription'), icon: RechargeSubscriptionIcon, hideInSimpleMode: true, featureFlag: flagPayment },
     { path: '/orders', label: t('nav.myOrders'), icon: OrderListIcon, hideInSimpleMode: true, featureFlag: flagPayment },
     { path: '/redeem', label: t('nav.redeem'), icon: GiftIcon, hideInSimpleMode: true },
@@ -756,6 +758,17 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/ops', label: t('nav.ops'), icon: ChartIcon, featureFlag: flagOpsMonitoring },
     { path: '/admin/users', label: t('nav.users'), icon: UsersIcon, hideInSimpleMode: true },
     { path: '/admin/groups', label: t('nav.groups'), icon: FolderIcon, hideInSimpleMode: true },
+    {
+      path: '/admin/upstreams',
+      label: t('nav.upstreamChannels'),
+      icon: ServerIcon,
+      hideInSimpleMode: true,
+      expandOnly: true,
+      children: [
+        { path: '/admin/upstreams', label: t('nav.upstreamAccounts'), icon: GlobeIcon },
+        { path: '/admin/upstreams/monitor', label: t('nav.channelMonitor'), icon: SignalIcon, featureFlag: flagChannelMonitor },
+      ],
+    },
     {
       path: '/admin/channels',
       label: t('nav.channelManagement'),
@@ -880,13 +893,18 @@ function toggleGroup(item: NavItem) {
 
 /**
  * Click handler for collapsible parent items.
- * - When sidebar is collapsed: do nothing (children are not visible).
+ * - When sidebar is collapsed: navigate to the parent path because children are not visible.
  * - When `expandOnly` is true: only toggle expand state.
  * - Otherwise (default, e.g. /admin/orders): navigate to the parent path
  *   (router-link semantics) and ensure the group is expanded.
  */
 function handleGroupClick(item: NavItem) {
-  if (sidebarCollapsed.value) return
+  if (sidebarCollapsed.value) {
+    if (route.path !== item.path) {
+      router.push(item.path)
+    }
+    return
+  }
   if (item.expandOnly) {
     toggleGroup(item)
     return
@@ -901,14 +919,7 @@ function handleGroupClick(item: NavItem) {
 }
 
 // Initialize theme
-const savedTheme = localStorage.getItem('theme')
-if (
-  savedTheme === 'dark' ||
-  (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
-) {
-  isDark.value = true
-  document.documentElement.classList.add('dark')
-}
+isDark.value = applyThemeClass()
 
 // Fetch admin settings (for feature-gated nav items like Ops).
 watch(
