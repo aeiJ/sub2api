@@ -22,6 +22,7 @@ const (
 	upstreamAccountMonitorTimelineLimit     = 60
 	upstreamAccountMonitorMinInterval       = 1
 	upstreamAccountMonitorMaxInterval       = 1440
+	upstreamAccountMonitorDegradedLatencyMs = 6000
 )
 
 type UpstreamAccountMonitorListParams struct {
@@ -31,10 +32,11 @@ type UpstreamAccountMonitorListParams struct {
 }
 
 type UpstreamAccountMonitorBatchParams struct {
-	Platform string
-	Status   string
-	Search   string
-	GroupID  int64
+	Platform      string
+	Status        string
+	MonitorStatus string
+	Search        string
+	GroupID       int64
 }
 
 type UpstreamAccountMonitorItem struct {
@@ -162,44 +164,12 @@ func (s *UpstreamAccountMonitorService) List(ctx context.Context, params Upstrea
 	if pageSize < 1 {
 		pageSize = 20
 	}
-	accounts, pageResult, err := s.accountRepo.ListWithFilters(ctx, pagination.PaginationParams{
-		Page:      page,
-		PageSize:  pageSize,
-		SortBy:    "name",
-		SortOrder: pagination.SortOrderAsc,
-	}, params.Platform, AccountTypeAPIKey, params.Status, params.Search, params.GroupID, "")
+	accounts, pageResult, plansByAccount, primaryPlans, latestByPlan, err := s.listMonitorAccounts(ctx, params, page, pageSize)
 	if err != nil {
 		return nil, err
 	}
 
-	accountIDs := make([]int64, 0, len(accounts))
-	for i := range accounts {
-		accountIDs = append(accountIDs, accounts[i].ID)
-	}
-
-	plansByAccount, err := s.planRepo.ListByAccountIDsAndPurpose(ctx, accountIDs, ScheduledTestPlanPurposeUpstreamMonitor)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.ensureDefaultPlansForAccounts(ctx, accounts, plansByAccount); err != nil {
-		return nil, err
-	}
-
-	planIDs := make([]int64, 0, len(accounts))
-	primaryPlans := make(map[int64]*ScheduledTestPlan, len(accounts))
-	for _, account := range accounts {
-		plan := selectMonitorPlan(plansByAccount[account.ID])
-		if plan == nil {
-			continue
-		}
-		primaryPlans[account.ID] = plan
-		planIDs = append(planIDs, plan.ID)
-	}
-
-	latestByPlan, err := s.resultRepo.ListLatestByPlanIDs(ctx, planIDs)
-	if err != nil {
-		return nil, err
-	}
+	planIDs := monitorPlanIDsForAccounts(accounts, primaryPlans)
 	now := time.Now()
 	stats7dByPlan, err := s.resultRepo.Stats7dByPlanIDs(ctx, planIDs, now.AddDate(0, 0, -7))
 	if err != nil {
@@ -262,6 +232,138 @@ func (s *UpstreamAccountMonitorService) List(ctx context.Context, params Upstrea
 		MonitorEnabledTotal:  enabledTotal,
 		MonitorDisabledTotal: disabledTotal,
 	}, nil
+}
+
+func (s *UpstreamAccountMonitorService) listMonitorAccounts(ctx context.Context, params UpstreamAccountMonitorListParams, page int, pageSize int) ([]Account, *pagination.PaginationResult, map[int64][]*ScheduledTestPlan, map[int64]*ScheduledTestPlan, map[int64]*ScheduledTestResult, error) {
+	monitorStatus := strings.TrimSpace(params.MonitorStatus)
+	if monitorStatus == "" {
+		accounts, pageResult, err := s.accountRepo.ListWithFilters(ctx, pagination.PaginationParams{
+			Page:      page,
+			PageSize:  pageSize,
+			SortBy:    "name",
+			SortOrder: pagination.SortOrderAsc,
+		}, params.Platform, AccountTypeAPIKey, params.Status, params.Search, params.GroupID, "")
+		if err != nil {
+			return nil, nil, nil, nil, nil, err
+		}
+		plansByAccount, primaryPlans, planIDs, err := s.loadPrimaryMonitorPlans(ctx, accounts)
+		if err != nil {
+			return nil, nil, nil, nil, nil, err
+		}
+		latestByPlan, err := s.resultRepo.ListLatestByPlanIDs(ctx, planIDs)
+		if err != nil {
+			return nil, nil, nil, nil, nil, err
+		}
+		return accounts, pageResult, plansByAccount, primaryPlans, latestByPlan, nil
+	}
+
+	accounts, err := s.listAllAPIKeyAccounts(ctx, params.UpstreamAccountMonitorBatchParams)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	plansByAccount, primaryPlans, planIDs, err := s.loadPrimaryMonitorPlans(ctx, accounts)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	latestByPlan, err := s.resultRepo.ListLatestByPlanIDs(ctx, planIDs)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+
+	filtered := make([]Account, 0, len(accounts))
+	for _, account := range accounts {
+		plan := primaryPlans[account.ID]
+		var result *ScheduledTestResult
+		if plan != nil {
+			result = latestByPlan[plan.ID]
+		}
+		if upstreamAccountMonitorHealthStatus(plan, result) == monitorStatus {
+			filtered = append(filtered, account)
+		}
+	}
+	pageResult := upstreamMonitorPaginationResult(int64(len(filtered)), page, pageSize)
+	return paginateUpstreamMonitorAccounts(filtered, page, pageSize), pageResult, plansByAccount, primaryPlans, latestByPlan, nil
+}
+
+func (s *UpstreamAccountMonitorService) loadPrimaryMonitorPlans(ctx context.Context, accounts []Account) (map[int64][]*ScheduledTestPlan, map[int64]*ScheduledTestPlan, []int64, error) {
+	accountIDs := make([]int64, 0, len(accounts))
+	for i := range accounts {
+		accountIDs = append(accountIDs, accounts[i].ID)
+	}
+	plansByAccount, err := s.planRepo.ListByAccountIDsAndPurpose(ctx, accountIDs, ScheduledTestPlanPurposeUpstreamMonitor)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := s.ensureDefaultPlansForAccounts(ctx, accounts, plansByAccount); err != nil {
+		return nil, nil, nil, err
+	}
+
+	primaryPlans := make(map[int64]*ScheduledTestPlan, len(accounts))
+	planIDs := make([]int64, 0, len(accounts))
+	for _, account := range accounts {
+		plan := selectMonitorPlan(plansByAccount[account.ID])
+		if plan == nil {
+			continue
+		}
+		primaryPlans[account.ID] = plan
+		planIDs = append(planIDs, plan.ID)
+	}
+	return plansByAccount, primaryPlans, planIDs, nil
+}
+
+func monitorPlanIDsForAccounts(accounts []Account, primaryPlans map[int64]*ScheduledTestPlan) []int64 {
+	planIDs := make([]int64, 0, len(accounts))
+	for _, account := range accounts {
+		if plan := primaryPlans[account.ID]; plan != nil {
+			planIDs = append(planIDs, plan.ID)
+		}
+	}
+	return planIDs
+}
+
+func upstreamAccountMonitorHealthStatus(plan *ScheduledTestPlan, result *ScheduledTestResult) string {
+	if plan == nil || result == nil {
+		return ""
+	}
+	if result.Status != "success" {
+		return MonitorStatusFailed
+	}
+	if result.LatencyMs >= upstreamAccountMonitorDegradedLatencyMs {
+		return MonitorStatusDegraded
+	}
+	return MonitorStatusOperational
+}
+
+func upstreamMonitorPaginationResult(total int64, page int, pageSize int) *pagination.PaginationResult {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	pages := 0
+	if pageSize > 0 {
+		pages = int((total + int64(pageSize) - 1) / int64(pageSize))
+	}
+	return &pagination.PaginationResult{Total: total, Page: page, PageSize: pageSize, Pages: pages}
+}
+
+func paginateUpstreamMonitorAccounts(accounts []Account, page int, pageSize int) []Account {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	start := (page - 1) * pageSize
+	if start >= len(accounts) {
+		return []Account{}
+	}
+	end := start + pageSize
+	if end > len(accounts) {
+		end = len(accounts)
+	}
+	return accounts[start:end]
 }
 
 func (s *UpstreamAccountMonitorService) monitorStateTotals(ctx context.Context) (enabled int, disabled int, err error) {
@@ -384,6 +486,10 @@ func (s *UpstreamAccountMonitorService) RunAll(ctx context.Context, params Upstr
 	if err != nil {
 		return nil, err
 	}
+	accounts, err = s.filterAccountsByMonitorStatus(ctx, accounts, params.MonitorStatus)
+	if err != nil {
+		return nil, err
+	}
 
 	resp := &UpstreamAccountMonitorBatchResponse{Total: len(accounts)}
 	var mu sync.Mutex
@@ -414,6 +520,33 @@ func (s *UpstreamAccountMonitorService) RunAll(ctx context.Context, params Upstr
 		return nil, err
 	}
 	return resp, nil
+}
+
+func (s *UpstreamAccountMonitorService) filterAccountsByMonitorStatus(ctx context.Context, accounts []Account, monitorStatus string) ([]Account, error) {
+	monitorStatus = strings.TrimSpace(monitorStatus)
+	if monitorStatus == "" {
+		return accounts, nil
+	}
+	_, primaryPlans, planIDs, err := s.loadPrimaryMonitorPlans(ctx, accounts)
+	if err != nil {
+		return nil, err
+	}
+	latestByPlan, err := s.resultRepo.ListLatestByPlanIDs(ctx, planIDs)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]Account, 0, len(accounts))
+	for _, account := range accounts {
+		plan := primaryPlans[account.ID]
+		var result *ScheduledTestResult
+		if plan != nil {
+			result = latestByPlan[plan.ID]
+		}
+		if upstreamAccountMonitorHealthStatus(plan, result) == monitorStatus {
+			filtered = append(filtered, account)
+		}
+	}
+	return filtered, nil
 }
 
 func (s *UpstreamAccountMonitorService) updateAllMonitoring(ctx context.Context, params UpstreamAccountMonitorBatchParams, enabled bool) (*UpstreamAccountMonitorBatchResponse, error) {

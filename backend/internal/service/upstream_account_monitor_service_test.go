@@ -307,6 +307,68 @@ func TestUpstreamAccountMonitorListReturns7dAnd15dAvailability(t *testing.T) {
 	require.True(t, resultRepo.statsSince[1].Before(resultRepo.statsSince[0]))
 }
 
+func TestUpstreamAccountMonitorListFiltersByMonitorStatus(t *testing.T) {
+	ctx := context.Background()
+	passing := Account{ID: 1, Name: "openai-pass", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	failing := Account{ID: 2, Name: "openai-fail", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	passPlan := &ScheduledTestPlan{ID: 11, AccountID: passing.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	failPlan := &ScheduledTestPlan{ID: 12, AccountID: failing.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	accountRepo := &upstreamMonitorAccountRepo{accounts: []Account{passing, failing}}
+	svc := NewUpstreamAccountMonitorService(
+		accountRepo,
+		newUpstreamMonitorPlanRepo(passPlan, failPlan),
+		&upstreamMonitorResultRepo{
+			latest: map[int64]*ScheduledTestResult{
+				passPlan.ID: {PlanID: passPlan.ID, Status: "success", LatencyMs: 100},
+				failPlan.ID: {PlanID: failPlan.ID, Status: "failed", ErrorMessage: "model unavailable"},
+			},
+		},
+		nil,
+	)
+
+	resp, err := svc.List(ctx, UpstreamAccountMonitorListParams{
+		Page:     1,
+		PageSize: 20,
+		UpstreamAccountMonitorBatchParams: UpstreamAccountMonitorBatchParams{
+			MonitorStatus: MonitorStatusFailed,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), resp.Total)
+	require.Len(t, resp.Items, 1)
+	require.Equal(t, failing.ID, resp.Items[0].AccountID)
+	require.NotNil(t, resp.Items[0].LatestResult)
+	require.Equal(t, "failed", resp.Items[0].LatestResult.Status)
+	require.NotEmpty(t, accountRepo.calls)
+	require.Empty(t, accountRepo.calls[0].Status, "monitor_status must not be sent as an account status filter")
+}
+
+func TestUpstreamAccountMonitorBatchFiltersByMonitorStatus(t *testing.T) {
+	ctx := context.Background()
+	passing := Account{ID: 1, Name: "openai-pass", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	failing := Account{ID: 2, Name: "openai-fail", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	passPlan := &ScheduledTestPlan{ID: 11, AccountID: passing.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	failPlan := &ScheduledTestPlan{ID: 12, AccountID: failing.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	svc := NewUpstreamAccountMonitorService(
+		&upstreamMonitorAccountRepo{accounts: []Account{passing, failing}},
+		newUpstreamMonitorPlanRepo(passPlan, failPlan),
+		&upstreamMonitorResultRepo{
+			latest: map[int64]*ScheduledTestResult{
+				passPlan.ID: {PlanID: passPlan.ID, Status: "success", LatencyMs: 100},
+				failPlan.ID: {PlanID: failPlan.ID, Status: "failed", ErrorMessage: "model unavailable"},
+			},
+		},
+		nil,
+	)
+
+	accounts, err := svc.filterAccountsByMonitorStatus(ctx, []Account{passing, failing}, MonitorStatusFailed)
+
+	require.NoError(t, err)
+	require.Len(t, accounts, 1)
+	require.Equal(t, failing.ID, accounts[0].ID)
+}
+
 func TestUpstreamAccountMonitorEnableAllIgnoresFilters(t *testing.T) {
 	ctx := context.Background()
 	groupOne := &Group{ID: 1, Name: "group-one"}

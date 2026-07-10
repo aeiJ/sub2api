@@ -98,10 +98,11 @@ func parseUpstreamAccountMonitorBatchParams(c *gin.Context) (service.UpstreamAcc
 		return service.UpstreamAccountMonitorBatchParams{}, err
 	}
 	return service.UpstreamAccountMonitorBatchParams{
-		Platform: c.Query("platform"),
-		Status:   c.Query("status"),
-		Search:   strings.TrimSpace(c.Query("search")),
-		GroupID:  groupID,
+		Platform:      c.Query("platform"),
+		Status:        c.Query("status"),
+		MonitorStatus: strings.TrimSpace(c.Query("monitor_status")),
+		Search:        strings.TrimSpace(c.Query("search")),
+		GroupID:       groupID,
 	}, nil
 }
 

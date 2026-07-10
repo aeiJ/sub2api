@@ -416,6 +416,11 @@ import {
   providerGradient,
   useChannelMonitorFormat,
 } from '@/composables/useChannelMonitorFormat'
+import {
+  STATUS_DEGRADED,
+  STATUS_FAILED,
+  STATUS_OPERATIONAL,
+} from '@/constants/channelMonitor'
 import type { ClaudeModel } from '@/types'
 
 const { t } = useI18n()
@@ -432,7 +437,7 @@ const groups = ref<AdminGroup[]>([])
 const loading = ref(false)
 const searchQuery = ref('')
 const platformFilter = ref('')
-const statusFilter = ref('')
+const statusFilter = ref<MonitorStatus | ''>('')
 const groupFilter = ref('')
 const currentWindow = ref<UpstreamMonitorWindow>('7d')
 const batchAction = ref<'runAll' | 'enableAll' | 'disableAll' | null>(null)
@@ -499,9 +504,9 @@ const platformOptions = computed(() => [
 
 const statusOptions = computed(() => [
   { value: '', label: t('admin.accounts.allStatus') },
-  { value: 'active', label: t('admin.accounts.status.active') },
-  { value: 'inactive', label: t('admin.accounts.status.inactive') },
-  { value: 'error', label: t('admin.accounts.status.error') },
+  { value: STATUS_OPERATIONAL, label: statusLabel(STATUS_OPERATIONAL) },
+  { value: STATUS_DEGRADED, label: statusLabel(STATUS_DEGRADED) },
+  { value: STATUS_FAILED, label: statusLabel(STATUS_FAILED) },
 ])
 
 const groupOptions = computed(() => [
@@ -531,7 +536,7 @@ const modelOptions = computed(() => {
 function currentFilterParams(): UpstreamAccountMonitorListParams {
   return {
     platform: platformFilter.value || undefined,
-    status: statusFilter.value || undefined,
+    monitor_status: statusFilter.value || undefined,
     search: searchQuery.value.trim() || undefined,
     group_id: groupFilter.value || undefined,
   }

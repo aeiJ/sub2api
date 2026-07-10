@@ -54,6 +54,7 @@ export interface UpstreamAccountMonitorListParams {
   page_size?: number
   platform?: string
   status?: string
+  monitor_status?: MonitorStatus | ''
   search?: string
   group_id?: number | string
 }
@@ -108,7 +109,10 @@ export async function list(
 }
 
 export async function runAll(params: UpstreamAccountMonitorListParams = {}): Promise<UpstreamAccountMonitorBatchResponse> {
-  const { data } = await apiClient.post<UpstreamAccountMonitorBatchResponse>(`${BASE_PATH}/run-all`, null, { params })
+  const { data } = await apiClient.post<UpstreamAccountMonitorBatchResponse>(`${BASE_PATH}/run-all`, null, {
+    params,
+    timeout: 180000,
+  })
   return data
 }
 
