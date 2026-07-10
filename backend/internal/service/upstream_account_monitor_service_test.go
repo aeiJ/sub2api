@@ -369,7 +369,7 @@ func TestUpstreamAccountMonitorBatchFiltersByMonitorStatus(t *testing.T) {
 	require.Equal(t, failing.ID, accounts[0].ID)
 }
 
-func TestUpstreamAccountMonitorEnableAllIgnoresFilters(t *testing.T) {
+func TestUpstreamAccountMonitorEnableAllAppliesFilters(t *testing.T) {
 	ctx := context.Background()
 	groupOne := &Group{ID: 1, Name: "group-one"}
 	groupTwo := &Group{ID: 2, Name: "group-two"}
@@ -388,12 +388,12 @@ func TestUpstreamAccountMonitorEnableAllIgnoresFilters(t *testing.T) {
 	resp, err := svc.EnableAll(ctx, UpstreamAccountMonitorBatchParams{GroupID: groupOne.ID})
 
 	require.NoError(t, err)
-	require.Equal(t, 2, resp.Total)
-	require.Equal(t, 2, resp.Enabled)
+	require.Equal(t, 1, resp.Total)
+	require.Equal(t, 1, resp.Enabled)
 	require.True(t, planOne.Enabled)
-	require.True(t, planTwo.Enabled)
+	require.False(t, planTwo.Enabled)
 	require.NotEmpty(t, accountRepo.calls)
-	require.Zero(t, accountRepo.calls[0].GroupID)
+	require.Equal(t, groupOne.ID, accountRepo.calls[0].GroupID)
 }
 
 func TestUpstreamAccountMonitorRunAllAppliesFiltersToAccountQuery(t *testing.T) {
@@ -439,6 +439,133 @@ func TestUpstreamAccountMonitorDisableAllSkipsSchedulableAccounts(t *testing.T) 
 	require.Equal(t, 1, resp.Disabled)
 	require.True(t, schedulablePlan.Enabled)
 	require.False(t, pausedPlan.Enabled)
+}
+
+func TestUpstreamAccountMonitorBatchUpdateSettingsAppliesFiltersAndRecomputesNextRun(t *testing.T) {
+	ctx := context.Background()
+	groupOne := &Group{ID: 1, Name: "group-one"}
+	groupTwo := &Group{ID: 2, Name: "group-two"}
+	accountOne := Account{ID: 1, Name: "openai-one", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive, Groups: []*Group{groupOne}}
+	accountTwo := Account{ID: 2, Name: "openai-two", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive, Groups: []*Group{groupTwo}}
+	planOne := &ScheduledTestPlan{ID: 11, AccountID: accountOne.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: false}
+	planTwo := &ScheduledTestPlan{ID: 12, AccountID: accountTwo.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: false}
+	planRepo := newUpstreamMonitorPlanRepo(planOne, planTwo)
+	accountRepo := &upstreamMonitorAccountRepo{accounts: []Account{accountOne, accountTwo}}
+	svc := NewUpstreamAccountMonitorService(
+		accountRepo,
+		planRepo,
+		nil,
+		nil,
+	)
+	interval := 15
+	jitter := 30
+
+	resp, err := svc.BatchUpdateSettings(ctx, UpstreamAccountMonitorBatchParams{GroupID: groupOne.ID}, UpstreamAccountMonitorBatchSettingsRequest{
+		IntervalMinutes: &interval,
+		JitterSeconds:   &jitter,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, resp.Total)
+	require.Equal(t, 1, resp.Updated)
+	require.Equal(t, interval, planOne.IntervalMinutes)
+	require.Equal(t, jitter, planOne.JitterSeconds)
+	require.NotNil(t, planOne.NextRunAt)
+	require.Equal(t, defaultUpstreamAccountMonitorInterval, planTwo.IntervalMinutes)
+	require.Zero(t, planTwo.JitterSeconds)
+	require.NotEmpty(t, accountRepo.calls)
+	require.Equal(t, groupOne.ID, accountRepo.calls[0].GroupID)
+}
+
+func TestUpstreamAccountMonitorBatchUpdateSettingsCreatesPlanWithoutEnablingUnschedulableAccount(t *testing.T) {
+	ctx := context.Background()
+	account := Account{ID: 1, Name: "paused", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: false}
+	planRepo := newUpstreamMonitorPlanRepo()
+	svc := NewUpstreamAccountMonitorService(
+		&upstreamMonitorAccountRepo{accounts: []Account{account}},
+		planRepo,
+		nil,
+		nil,
+	)
+	interval := 20
+
+	resp, err := svc.BatchUpdateSettings(ctx, UpstreamAccountMonitorBatchParams{}, UpstreamAccountMonitorBatchSettingsRequest{
+		IntervalMinutes: &interval,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, resp.Total)
+	require.Equal(t, 1, resp.Created)
+	plans := planRepo.byAccountAndPurpose(account.ID, ScheduledTestPlanPurposeUpstreamMonitor)
+	require.Len(t, plans, 1)
+	require.Equal(t, interval, plans[0].IntervalMinutes)
+	require.False(t, plans[0].Enabled)
+}
+
+func TestUpstreamAccountMonitorBatchUpdateSettingsSkipsDisablingSchedulableAccount(t *testing.T) {
+	ctx := context.Background()
+	account := Account{ID: 1, Name: "scheduled", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true}
+	plan := &ScheduledTestPlan{ID: 11, AccountID: account.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	svc := NewUpstreamAccountMonitorService(
+		&upstreamMonitorAccountRepo{accounts: []Account{account}},
+		newUpstreamMonitorPlanRepo(plan),
+		nil,
+		nil,
+	)
+	enabled := false
+
+	resp, err := svc.BatchUpdateSettings(ctx, UpstreamAccountMonitorBatchParams{}, UpstreamAccountMonitorBatchSettingsRequest{
+		MonitorEnabled: &enabled,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, resp.Total)
+	require.Equal(t, 1, resp.Skipped)
+	require.True(t, plan.Enabled)
+}
+
+func TestUpstreamAccountMonitorStreamRunAllEmitsItemEvents(t *testing.T) {
+	ctx := context.Background()
+	accountOne := Account{ID: 1, Name: "openai-one", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	accountTwo := Account{ID: 2, Name: "openai-two", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	planOne := &ScheduledTestPlan{ID: 11, AccountID: accountOne.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	planTwo := &ScheduledTestPlan{ID: 12, AccountID: accountTwo.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	svc := NewUpstreamAccountMonitorService(
+		&upstreamMonitorAccountRepo{accounts: []Account{accountOne, accountTwo}},
+		newUpstreamMonitorPlanRepo(planOne, planTwo),
+		&upstreamMonitorResultRepo{},
+		&upstreamMonitorTestSvc{
+			results: map[int64]*ScheduledTestResult{
+				accountOne.ID: {Status: "success", LatencyMs: 100},
+				accountTwo.ID: {Status: "failed", ErrorMessage: "model unavailable"},
+			},
+		},
+	)
+
+	events, err := svc.StreamRunAll(ctx, UpstreamAccountMonitorBatchParams{})
+
+	require.NoError(t, err)
+	var got []UpstreamAccountMonitorRunAllStreamEvent
+	for event := range events {
+		got = append(got, event)
+	}
+	require.NotEmpty(t, got)
+	require.Equal(t, "started", got[0].Type)
+	require.Equal(t, 2, got[0].Total)
+	var itemCount int
+	var done *UpstreamAccountMonitorRunAllStreamEvent
+	for i := range got {
+		if got[i].Type == "item" {
+			itemCount++
+		}
+		if got[i].Type == "done" {
+			done = &got[i]
+		}
+	}
+	require.Equal(t, 2, itemCount)
+	require.NotNil(t, done)
+	require.Equal(t, 1, done.Success)
+	require.Equal(t, 1, done.Failed)
 }
 
 func TestUpstreamAccountMonitorListReportsGlobalMonitorStateTotals(t *testing.T) {
@@ -772,6 +899,18 @@ type upstreamMonitorResultRepo struct {
 	statsSince    []time.Time
 	latest        map[int64]*ScheduledTestResult
 	recent        map[int64][]*ScheduledTestResult
+	created       []*ScheduledTestResult
+}
+
+func (r *upstreamMonitorResultRepo) Create(_ context.Context, result *ScheduledTestResult) (*ScheduledTestResult, error) {
+	if result.ID == 0 {
+		result.ID = int64(len(r.created) + 1)
+	}
+	if result.CreatedAt.IsZero() {
+		result.CreatedAt = time.Now()
+	}
+	r.created = append(r.created, result)
+	return result, nil
 }
 
 func (r *upstreamMonitorResultRepo) ListLatestByPlanIDs(_ context.Context, planIDs []int64) (map[int64]*ScheduledTestResult, error) {
@@ -796,4 +935,32 @@ func (r *upstreamMonitorResultRepo) Stats7dByPlanIDs(_ context.Context, _ []int6
 	stats := r.statsSequence[0]
 	r.statsSequence = r.statsSequence[1:]
 	return stats, nil
+}
+
+func (r *upstreamMonitorResultRepo) PruneOldResults(_ context.Context, _ int64, _ int) error {
+	return nil
+}
+
+type upstreamMonitorTestSvc struct {
+	results map[int64]*ScheduledTestResult
+}
+
+func (s *upstreamMonitorTestSvc) RunTestBackgroundWithEndpointPing(_ context.Context, accountID int64, _ string) (*ScheduledTestResult, error) {
+	if result := s.results[accountID]; result != nil {
+		now := time.Now()
+		if result.StartedAt.IsZero() {
+			result.StartedAt = now
+		}
+		if result.FinishedAt.IsZero() {
+			result.FinishedAt = now
+		}
+		return result, nil
+	}
+	now := time.Now()
+	return &ScheduledTestResult{
+		Status:     "success",
+		LatencyMs:  100,
+		StartedAt:  now,
+		FinishedAt: now,
+	}, nil
 }

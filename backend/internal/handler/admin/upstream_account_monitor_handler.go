@@ -1,7 +1,9 @@
 package admin
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -33,7 +35,12 @@ func (h *UpstreamAccountMonitorHandler) List(c *gin.Context) {
 }
 
 func (h *UpstreamAccountMonitorHandler) EnableAll(c *gin.Context) {
-	result, err := h.service.EnableAll(c.Request.Context(), service.UpstreamAccountMonitorBatchParams{})
+	params, err := parseUpstreamAccountMonitorBatchParams(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	result, err := h.service.EnableAll(c.Request.Context(), params)
 	if err != nil {
 		response.InternalError(c, err.Error())
 		return
@@ -42,7 +49,12 @@ func (h *UpstreamAccountMonitorHandler) EnableAll(c *gin.Context) {
 }
 
 func (h *UpstreamAccountMonitorHandler) DisableAll(c *gin.Context) {
-	result, err := h.service.DisableAll(c.Request.Context(), service.UpstreamAccountMonitorBatchParams{})
+	params, err := parseUpstreamAccountMonitorBatchParams(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	result, err := h.service.DisableAll(c.Request.Context(), params)
 	if err != nil {
 		response.InternalError(c, err.Error())
 		return
@@ -62,6 +74,37 @@ func (h *UpstreamAccountMonitorHandler) RunAll(c *gin.Context) {
 		return
 	}
 	response.Success(c, result)
+}
+
+func (h *UpstreamAccountMonitorHandler) StreamRunAll(c *gin.Context) {
+	params, err := parseUpstreamAccountMonitorBatchParams(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	events, err := h.service.StreamRunAll(c.Request.Context(), params)
+	if err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		response.InternalError(c, "streaming unsupported")
+		return
+	}
+	header := c.Writer.Header()
+	header.Set("Content-Type", "text/event-stream")
+	header.Set("Cache-Control", "no-cache")
+	header.Set("Connection", "keep-alive")
+	header.Set("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+	for event := range events {
+		if err := writeUpstreamAccountMonitorSSE(c, event); err != nil {
+			return
+		}
+		flusher.Flush()
+	}
 }
 
 func (h *UpstreamAccountMonitorHandler) RunOne(c *gin.Context) {
@@ -119,6 +162,39 @@ func parseUpstreamAccountMonitorGroupID(raw string) (int64, error) {
 		return 0, fmt.Errorf("invalid group_id")
 	}
 	return groupID, nil
+}
+
+func (h *UpstreamAccountMonitorHandler) BatchUpdateSettings(c *gin.Context) {
+	params, err := parseUpstreamAccountMonitorBatchParams(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	var req service.UpstreamAccountMonitorBatchSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	result, err := h.service.BatchUpdateSettings(c.Request.Context(), params, req)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, result)
+}
+
+func writeUpstreamAccountMonitorSSE(c *gin.Context, event service.UpstreamAccountMonitorRunAllStreamEvent) error {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(c.Writer, "event: %s\n", event.Type); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", payload); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (h *UpstreamAccountMonitorHandler) UpdateSettings(c *gin.Context) {

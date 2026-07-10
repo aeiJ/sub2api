@@ -39,6 +39,12 @@ type UpstreamAccountMonitorBatchParams struct {
 	GroupID       int64
 }
 
+type UpstreamAccountMonitorBatchSettingsRequest struct {
+	MonitorEnabled  *bool `json:"monitor_enabled,omitempty"`
+	IntervalMinutes *int  `json:"interval_minutes,omitempty"`
+	JitterSeconds   *int  `json:"jitter_seconds,omitempty"`
+}
+
 type UpstreamAccountMonitorItem struct {
 	AccountID       int64                      `json:"account_id"`
 	AccountName     string                     `json:"account_name"`
@@ -110,11 +116,23 @@ type UpstreamAccountMonitorRunResult struct {
 	Error     string               `json:"error,omitempty"`
 }
 
+type UpstreamAccountMonitorRunAllStreamEvent struct {
+	Type      string               `json:"type"`
+	Total     int                  `json:"total,omitempty"`
+	AccountID int64                `json:"account_id,omitempty"`
+	PlanID    int64                `json:"plan_id,omitempty"`
+	Result    *ScheduledTestResult `json:"result,omitempty"`
+	Error     string               `json:"error,omitempty"`
+	Success   int                  `json:"success,omitempty"`
+	Failed    int                  `json:"failed,omitempty"`
+	Skipped   int                  `json:"skipped,omitempty"`
+}
+
 type UpstreamAccountMonitorService struct {
 	accountRepo AccountRepository
 	planRepo    ScheduledTestPlanRepository
 	resultRepo  ScheduledTestResultRepository
-	testSvc     *AccountTestService
+	testSvc     upstreamAccountMonitorTester
 	recoverer   upstreamAccountRecoverer
 }
 
@@ -122,7 +140,7 @@ func NewUpstreamAccountMonitorService(
 	accountRepo AccountRepository,
 	planRepo ScheduledTestPlanRepository,
 	resultRepo ScheduledTestResultRepository,
-	testSvc *AccountTestService,
+	testSvc upstreamAccountMonitorTester,
 ) *UpstreamAccountMonitorService {
 	return &UpstreamAccountMonitorService{
 		accountRepo: accountRepo,
@@ -134,6 +152,10 @@ func NewUpstreamAccountMonitorService(
 
 type upstreamAccountRecoverer interface {
 	RecoverAccountAfterSuccessfulTest(ctx context.Context, accountID int64) (*SuccessfulTestRecoveryResult, error)
+}
+
+type upstreamAccountMonitorTester interface {
+	RunTestBackgroundWithEndpointPing(ctx context.Context, accountID int64, modelID string) (*ScheduledTestResult, error)
 }
 
 func ProvideUpstreamAccountMonitorService(
@@ -393,11 +415,11 @@ func (s *UpstreamAccountMonitorService) monitorStateTotals(ctx context.Context) 
 }
 
 func (s *UpstreamAccountMonitorService) EnableAll(ctx context.Context, params UpstreamAccountMonitorBatchParams) (*UpstreamAccountMonitorBatchResponse, error) {
-	return s.updateAllMonitoring(ctx, UpstreamAccountMonitorBatchParams{}, true)
+	return s.updateAllMonitoring(ctx, params, true)
 }
 
 func (s *UpstreamAccountMonitorService) DisableAll(ctx context.Context, params UpstreamAccountMonitorBatchParams) (*UpstreamAccountMonitorBatchResponse, error) {
-	return s.updateAllMonitoring(ctx, UpstreamAccountMonitorBatchParams{}, false)
+	return s.updateAllMonitoring(ctx, params, false)
 }
 
 func (s *UpstreamAccountMonitorService) RunOne(ctx context.Context, accountID int64) (*UpstreamAccountMonitorRunResult, error) {
@@ -522,6 +544,106 @@ func (s *UpstreamAccountMonitorService) RunAll(ctx context.Context, params Upstr
 	return resp, nil
 }
 
+func (s *UpstreamAccountMonitorService) StreamRunAll(ctx context.Context, params UpstreamAccountMonitorBatchParams) (<-chan UpstreamAccountMonitorRunAllStreamEvent, error) {
+	accounts, err := s.listAllAPIKeyAccounts(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	accounts, err = s.filterAccountsByMonitorStatus(ctx, accounts, params.MonitorStatus)
+	if err != nil {
+		return nil, err
+	}
+
+	events := make(chan UpstreamAccountMonitorRunAllStreamEvent, upstreamAccountMonitorRunConcurrency+1)
+	go func() {
+		defer close(events)
+		if !sendUpstreamAccountMonitorRunEvent(ctx, events, UpstreamAccountMonitorRunAllStreamEvent{
+			Type:  "started",
+			Total: len(accounts),
+		}) {
+			return
+		}
+
+		resp := &UpstreamAccountMonitorBatchResponse{Total: len(accounts)}
+		var mu sync.Mutex
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(upstreamAccountMonitorRunConcurrency)
+	submitLoop:
+		for _, account := range accounts {
+			select {
+			case <-gctx.Done():
+				break submitLoop
+			default:
+			}
+			acc := account
+			g.Go(func() error {
+				select {
+				case <-gctx.Done():
+					return gctx.Err()
+				default:
+				}
+
+				event := s.runOneAccountMonitor(gctx, acc)
+				mu.Lock()
+				if event.Error != "" || event.Result == nil || event.Result.Status != "success" {
+					resp.Failed++
+				} else {
+					resp.Success++
+				}
+				mu.Unlock()
+				if !sendUpstreamAccountMonitorRunEvent(gctx, events, event) {
+					return gctx.Err()
+				}
+				return nil
+			})
+		}
+		if err := g.Wait(); err != nil || ctx.Err() != nil {
+			return
+		}
+		mu.Lock()
+		done := UpstreamAccountMonitorRunAllStreamEvent{
+			Type:    "done",
+			Total:   resp.Total,
+			Success: resp.Success,
+			Failed:  resp.Failed,
+			Skipped: resp.Skipped,
+		}
+		mu.Unlock()
+		_ = sendUpstreamAccountMonitorRunEvent(ctx, events, done)
+	}()
+	return events, nil
+}
+
+func sendUpstreamAccountMonitorRunEvent(ctx context.Context, events chan<- UpstreamAccountMonitorRunAllStreamEvent, event UpstreamAccountMonitorRunAllStreamEvent) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case events <- event:
+		return true
+	}
+}
+
+func (s *UpstreamAccountMonitorService) runOneAccountMonitor(ctx context.Context, account Account) UpstreamAccountMonitorRunAllStreamEvent {
+	event := UpstreamAccountMonitorRunAllStreamEvent{
+		Type:      "item",
+		AccountID: account.ID,
+	}
+	plan, _, err := s.ensureDefaultPlan(ctx, account.ID, defaultMonitorEnabled(&account))
+	if err != nil {
+		event.Error = err.Error()
+		return event
+	}
+	if plan != nil {
+		event.PlanID = plan.ID
+	}
+	result, err := s.runAndSave(ctx, plan)
+	event.Result = result
+	if err != nil {
+		event.Error = err.Error()
+	}
+	return event
+}
+
 func (s *UpstreamAccountMonitorService) filterAccountsByMonitorStatus(ctx context.Context, accounts []Account, monitorStatus string) ([]Account, error) {
 	monitorStatus = strings.TrimSpace(monitorStatus)
 	if monitorStatus == "" {
@@ -622,6 +744,122 @@ func (s *UpstreamAccountMonitorService) updateAllMonitoring(ctx context.Context,
 		}
 		if !changed {
 			resp.Skipped++
+		}
+	}
+	return resp, nil
+}
+
+func (s *UpstreamAccountMonitorService) BatchUpdateSettings(ctx context.Context, params UpstreamAccountMonitorBatchParams, req UpstreamAccountMonitorBatchSettingsRequest) (*UpstreamAccountMonitorBatchResponse, error) {
+	if req.MonitorEnabled == nil && req.IntervalMinutes == nil && req.JitterSeconds == nil {
+		return nil, fmt.Errorf("at least one batch setting is required")
+	}
+	if req.IntervalMinutes != nil && (*req.IntervalMinutes < upstreamAccountMonitorMinInterval || *req.IntervalMinutes > upstreamAccountMonitorMaxInterval) {
+		return nil, fmt.Errorf("interval_minutes must be between %d and %d", upstreamAccountMonitorMinInterval, upstreamAccountMonitorMaxInterval)
+	}
+	if req.JitterSeconds != nil && *req.JitterSeconds < 0 {
+		return nil, fmt.Errorf("jitter_seconds must be >= 0")
+	}
+
+	accounts, err := s.listAllAPIKeyAccounts(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	accounts, err = s.filterAccountsByMonitorStatus(ctx, accounts, params.MonitorStatus)
+	if err != nil {
+		return nil, err
+	}
+	accountIDs := make([]int64, 0, len(accounts))
+	for _, account := range accounts {
+		accountIDs = append(accountIDs, account.ID)
+	}
+	plansByAccount, err := s.planRepo.ListByAccountIDsAndPurpose(ctx, accountIDs, ScheduledTestPlanPurposeUpstreamMonitor)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &UpstreamAccountMonitorBatchResponse{Total: len(accounts)}
+	now := time.Now()
+	for _, account := range accounts {
+		plan := selectMonitorPlan(plansByAccount[account.ID])
+		created := false
+		if plan == nil {
+			defaultEnabled := defaultMonitorEnabled(&account)
+			if req.MonitorEnabled != nil {
+				defaultEnabled = *req.MonitorEnabled
+			}
+			if monitorRequired(&account) {
+				defaultEnabled = true
+			}
+			plan, created, err = s.ensureDefaultPlan(ctx, account.ID, defaultEnabled)
+			if err != nil {
+				return nil, err
+			}
+			if created {
+				resp.Created++
+			}
+		}
+		if plan == nil {
+			resp.Skipped++
+			continue
+		}
+
+		changed := created
+		if req.IntervalMinutes != nil && plan.IntervalMinutes != *req.IntervalMinutes {
+			plan.IntervalMinutes = *req.IntervalMinutes
+			plan.CronExpression = cronFromIntervalMinutes(*req.IntervalMinutes)
+			changed = true
+		}
+		effectiveInterval := monitorIntervalMinutes(plan)
+		if req.JitterSeconds != nil {
+			if *req.JitterSeconds >= effectiveInterval*60 {
+				return nil, fmt.Errorf("jitter_seconds must be >= 0 and less than interval seconds")
+			}
+			if plan.JitterSeconds != *req.JitterSeconds {
+				plan.JitterSeconds = *req.JitterSeconds
+				changed = true
+			}
+		}
+		if req.MonitorEnabled != nil {
+			if !*req.MonitorEnabled && monitorRequired(&account) {
+				if !plan.Enabled {
+					plan.Enabled = true
+					changed = true
+				}
+				resp.Skipped++
+			} else if created {
+				if plan.Enabled {
+					resp.Enabled++
+				}
+			} else if plan.Enabled != *req.MonitorEnabled {
+				plan.Enabled = *req.MonitorEnabled
+				changed = true
+				if *req.MonitorEnabled {
+					resp.Enabled++
+				} else {
+					resp.Disabled++
+				}
+			} else if !changed {
+				resp.Skipped++
+			}
+		} else if monitorRequired(&account) && !plan.Enabled {
+			plan.Enabled = true
+			changed = true
+			resp.Enabled++
+		}
+
+		if !changed {
+			continue
+		}
+		nextRun, err := computeScheduledTestNextRun(plan, now)
+		if err != nil {
+			return nil, err
+		}
+		plan.NextRunAt = &nextRun
+		if _, err := s.planRepo.Update(ctx, plan); err != nil {
+			return nil, err
+		}
+		if !created {
+			resp.Updated++
 		}
 	}
 	return resp, nil
