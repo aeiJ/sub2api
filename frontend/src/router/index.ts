@@ -311,17 +311,6 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
-    path: '/recharge-center',
-    name: 'RechargeCenter',
-    component: () => import('@/views/user/RechargeCenterView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: false,
-      title: 'Recharge Center',
-      titleKey: 'nav.rechargeCenter'
-    }
-  },
-  {
     path: '/orders',
     name: 'OrderList',
     component: () => import('@/views/user/UserOrdersView.vue'),

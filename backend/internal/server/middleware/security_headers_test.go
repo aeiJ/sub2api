@@ -340,13 +340,12 @@ func TestEnhanceCSPPolicy(t *testing.T) {
 		assert.Contains(t, enhanced, AirwallexCheckoutDomain)
 		assert.Contains(t, enhanced, AirwallexDemoStaticDomain)
 		assert.Contains(t, enhanced, AirwallexDemoCheckoutDomain)
-		assert.Contains(t, enhanced, LdxpPayDomain)
 		assert.Contains(t, enhanced, "style-src 'self'")
 		assert.Contains(t, enhanced, "frame-src 'self'")
 	})
 
 	t.Run("does_not_duplicate_airwallex_domains", func(t *testing.T) {
-		policy := "default-src 'self'; script-src 'self' https://static.airwallex.com https://static-demo.airwallex.com; frame-src https://checkout.airwallex.com https://checkout-demo.airwallex.com https://pay.ldxp.cn"
+		policy := "default-src 'self'; script-src 'self' https://static.airwallex.com https://static-demo.airwallex.com; frame-src https://checkout.airwallex.com https://checkout-demo.airwallex.com"
 		enhanced := enhanceCSPPolicy(policy)
 
 		assert.Equal(t, 1, countDirectiveValue(enhanced, "script-src", AirwallexStaticDomain))
@@ -359,7 +358,6 @@ func TestEnhanceCSPPolicy(t *testing.T) {
 		assert.Equal(t, 1, countDirectiveValue(enhanced, "style-src", AirwallexDemoStaticDomain))
 		assert.Equal(t, 1, countDirectiveValue(enhanced, "style-src", AirwallexDemoCheckoutDomain))
 		assert.Equal(t, 1, countDirectiveValue(enhanced, "frame-src", AirwallexDemoCheckoutDomain))
-		assert.Equal(t, 1, countDirectiveValue(enhanced, "frame-src", LdxpPayDomain))
 	})
 }
 
