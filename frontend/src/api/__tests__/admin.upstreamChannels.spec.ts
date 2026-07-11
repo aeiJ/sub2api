@@ -39,6 +39,13 @@ describe('admin upstreamChannels API', () => {
     })
   })
 
+  it('is exposed through the admin API barrel', async () => {
+    const { adminAPI, upstreamChannelsAPI: namedUpstreamChannelsAPI } = await import('@/api/admin')
+
+    expect(adminAPI.upstreamChannels).toBe(upstreamChannelsAPI)
+    expect(namedUpstreamChannelsAPI).toBe(upstreamChannelsAPI)
+  })
+
   it('creates a nested upstream channel payload', async () => {
     const payload = {
       name: 'Main upstream',

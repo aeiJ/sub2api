@@ -68,6 +68,7 @@ func (h *UpstreamChannelHandler) List(c *gin.Context) {
 	page, pageSize := response.ParsePagination(c)
 	status := c.Query("status")
 	search := strings.TrimSpace(c.Query("search"))
+	provider := c.Query("provider")
 	if len(search) > 100 {
 		search = search[:100]
 	}
@@ -76,7 +77,7 @@ func (h *UpstreamChannelHandler) List(c *gin.Context) {
 		PageSize:  pageSize,
 		SortBy:    c.DefaultQuery("sort_by", "created_at"),
 		SortOrder: c.DefaultQuery("sort_order", "desc"),
-	}, status, search)
+	}, status, search, provider)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

@@ -265,6 +265,13 @@ func newOpenAIAdvancedSchedulerRateLimitService(enabled string, values ...string
 	}
 }
 
+func newOpenAIAdvancedSchedulerRateLimitServiceWithRepo(repo *openAIAdvancedSchedulerSettingRepoStub) *RateLimitService {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	return &RateLimitService{
+		settingService: NewSettingService(repo, &config.Config{}),
+	}
+}
+
 func (s *openAISnapshotCacheStub) GetSnapshot(ctx context.Context, bucket SchedulerBucket) ([]*Account, bool, error) {
 	if len(s.snapshotAccounts) == 0 {
 		return nil, false, nil
@@ -701,6 +708,21 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_EnabledUsesAdvancedPrev
 	require.Equal(t, int64(37001), selection.Account.ID)
 	require.Equal(t, openAIAccountScheduleLayerPreviousResponse, decision.Layer)
 	require.True(t, decision.StickyPreviousHit)
+}
+
+func TestOpenAIGatewayService_AdvancedSchedulerDefaultsEnabledWhenSettingMissing(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	ctx := context.Background()
+	repo := &openAIAdvancedSchedulerSettingRepoStub{values: map[string]string{}}
+	svc := &OpenAIGatewayService{
+		rateLimitService: newOpenAIAdvancedSchedulerRateLimitServiceWithRepo(repo),
+	}
+
+	require.True(t, svc.isOpenAIAdvancedSchedulerEnabled(ctx))
+
+	repo.values[openAIAdvancedSchedulerSettingKey] = "false"
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	require.False(t, svc.isOpenAIAdvancedSchedulerEnabled(ctx))
 }
 
 func TestOpenAIGatewayService_SelectAccountWithScheduler_StickyWeightedSessionInTopKUsesStickyFirst(t *testing.T) {
@@ -3557,6 +3579,44 @@ func TestOpenAIGatewayService_OpenAIAccountSchedulerMetrics(t *testing.T) {
 	require.GreaterOrEqual(t, snapshot.SchedulerLatencyMsAvg, float64(0))
 	require.GreaterOrEqual(t, snapshot.StickyHitRatio, 0.0)
 	require.GreaterOrEqual(t, snapshot.RuntimeStatsAccountCount, 1)
+}
+
+func TestOpenAIGatewayService_ReportResultUsesExistingSchedulerAfterSettingDisabled(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(127)
+	account := Account{
+		ID:          39501,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		GroupIDs:    []int64{groupID},
+	}
+	repo := &openAIAdvancedSchedulerSettingRepoStub{
+		values: map[string]string{openAIAdvancedSchedulerSettingKey: "true"},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: []Account{account}},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitServiceWithRepo(repo),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, svc.openaiScheduler)
+
+	repo.values[openAIAdvancedSchedulerSettingKey] = "false"
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	ttft := 123
+	svc.ReportOpenAIAccountScheduleResult(account.ID, true, &ttft)
+
+	_, observedTTFT, hasTTFT := svc.openaiAccountStats.snapshot(account.ID)
+	require.True(t, hasTTFT)
+	require.InDelta(t, float64(ttft), observedTTFT, 1e-9)
 }
 
 func intPtrForTest(v int) *int {

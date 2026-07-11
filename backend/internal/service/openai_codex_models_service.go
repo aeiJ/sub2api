@@ -26,6 +26,47 @@ type CodexModelsManifest struct {
 	NotModified bool
 }
 
+// SelectCodexModelsManifestAccount selects an OpenAI OAuth account for the
+// ChatGPT Codex models manifest. API key accounts can serve user requests as a
+// fallback, but this manifest endpoint requires a ChatGPT backend access token.
+func (s *OpenAIGatewayService) SelectCodexModelsManifestAccount(ctx context.Context, groupID *int64) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	excludedIDs := make(map[int64]struct{})
+	for {
+		selection, decision, err := s.SelectAccountWithSchedulerForCapability(
+			ctx,
+			groupID,
+			"",
+			"",
+			"",
+			excludedIDs,
+			OpenAIUpstreamTransportAny,
+			"",
+			false,
+			false,
+			PlatformOpenAI,
+		)
+		if err != nil {
+			return nil, decision, err
+		}
+		if selection == nil || selection.Account == nil {
+			return selection, decision, nil
+		}
+		if selection.Account.IsOpenAIOAuth() {
+			return selection, decision, nil
+		}
+		if selection.ReleaseFunc != nil {
+			selection.ReleaseFunc()
+		}
+		if selection.Account.ID <= 0 {
+			return nil, decision, noAvailableOpenAISelectionError("", false)
+		}
+		if _, exists := excludedIDs[selection.Account.ID]; exists {
+			return nil, decision, noAvailableOpenAISelectionError("", false)
+		}
+		excludedIDs[selection.Account.ID] = struct{}{}
+	}
+}
+
 // FetchCodexModelsManifest fetches the live Codex models manifest from the
 // ChatGPT backend using the account's OAuth credentials.
 //

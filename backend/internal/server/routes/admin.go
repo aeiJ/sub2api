@@ -162,8 +162,10 @@ func registerUpstreamAccountMonitorRoutes(admin *gin.RouterGroup, h *handler.Han
 	{
 		monitors.GET("", h.Admin.UpstreamAccountMonitor.List)
 		monitors.POST("/run-all", h.Admin.UpstreamAccountMonitor.RunAll)
+		monitors.GET("/run-all/stream", h.Admin.UpstreamAccountMonitor.StreamRunAll)
 		monitors.POST("/enable-all", h.Admin.UpstreamAccountMonitor.EnableAll)
 		monitors.POST("/disable-all", h.Admin.UpstreamAccountMonitor.DisableAll)
+		monitors.POST("/batch-settings", h.Admin.UpstreamAccountMonitor.BatchUpdateSettings)
 		monitors.POST("/:accountId/run", h.Admin.UpstreamAccountMonitor.RunOne)
 		monitors.PUT("/:accountId/settings", h.Admin.UpstreamAccountMonitor.UpdateSettings)
 	}

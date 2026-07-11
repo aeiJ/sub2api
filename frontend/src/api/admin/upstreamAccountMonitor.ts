@@ -1,5 +1,8 @@
-import { apiClient } from '../client'
+import { apiClient, buildApiUrl } from '../client'
 import type { MonitorStatus } from './channelMonitor'
+
+export type UpstreamAccountMonitorStatus = Extract<MonitorStatus, 'operational' | 'degraded' | 'failed'>
+export type UpstreamAccountMonitorAvailabilityWindow = '7d' | '15d'
 
 export interface UpstreamMonitorGroupView {
   id: number
@@ -53,9 +56,12 @@ export interface UpstreamAccountMonitorListParams {
   page?: number
   page_size?: number
   platform?: string
-  status?: string
+  monitor_status?: UpstreamAccountMonitorStatus | ''
   search?: string
   group_id?: number | string
+  sort_by?: 'availability'
+  sort_order?: 'asc' | 'desc'
+  availability_window?: UpstreamAccountMonitorAvailabilityWindow
 }
 
 export interface UpstreamAccountMonitorListResponse {
@@ -79,12 +85,24 @@ export interface UpstreamAccountMonitorBatchResponse {
   skipped?: number
 }
 
+export interface UpstreamAccountMonitorBatchSettingsRequest {
+  monitor_enabled?: boolean
+  interval_minutes?: number
+  jitter_seconds?: number
+}
+
 export interface UpstreamAccountMonitorRunResponse {
   account_id: number
   plan_id: number
   result: ScheduledMonitorResult | null
   error?: string
 }
+
+export type UpstreamAccountMonitorRunAllStreamEvent =
+  | { type: 'started'; total: number }
+  | { type: 'item'; account_id: number; plan_id?: number; result?: ScheduledMonitorResult | null; error?: string }
+  | { type: 'done'; total: number; success?: number; failed?: number; skipped?: number }
+  | { type: 'error'; error?: string; message?: string }
 
 export interface UpstreamAccountMonitorSettingsRequest {
   model_id: string
@@ -108,8 +126,79 @@ export async function list(
 }
 
 export async function runAll(params: UpstreamAccountMonitorListParams = {}): Promise<UpstreamAccountMonitorBatchResponse> {
-  const { data } = await apiClient.post<UpstreamAccountMonitorBatchResponse>(`${BASE_PATH}/run-all`, null, { params })
+  const { data } = await apiClient.post<UpstreamAccountMonitorBatchResponse>(`${BASE_PATH}/run-all`, null, {
+    params,
+    timeout: 180000,
+  })
   return data
+}
+
+export async function runAllStream(
+  params: UpstreamAccountMonitorListParams = {},
+  onEvent: (event: UpstreamAccountMonitorRunAllStreamEvent) => void,
+  options: { signal?: AbortSignal } = {}
+): Promise<void> {
+  const url = new URL(buildApiUrl(`${BASE_PATH}/run-all/stream`), window.location.origin)
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      url.searchParams.set(key, String(value))
+    }
+  })
+
+  const headers: Record<string, string> = { Accept: 'text/event-stream' }
+  const token = localStorage.getItem('auth_token')
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers,
+    credentials: 'include',
+    signal: options.signal,
+  })
+  if (!response.ok || !response.body) {
+    const text = await response.text().catch(() => '')
+    throw new Error(text || `Stream request failed with HTTP ${response.status}`)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      buffer = parseSSEBuffer(buffer, onEvent)
+    }
+    buffer += decoder.decode()
+    parseSSEBuffer(`${buffer}\n\n`, onEvent)
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+function parseSSEBuffer(
+  buffer: string,
+  onEvent: (event: UpstreamAccountMonitorRunAllStreamEvent) => void
+): string {
+  const normalized = buffer.replace(/\r\n/g, '\n')
+  const frames = normalized.split('\n\n')
+  const rest = frames.pop() || ''
+  for (const frame of frames) {
+    const dataLines: string[] = []
+    for (const line of frame.split('\n')) {
+      if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trimStart())
+      }
+    }
+    if (!dataLines.length) continue
+    const data = dataLines.join('\n')
+    if (!data.trim()) continue
+    onEvent(JSON.parse(data) as UpstreamAccountMonitorRunAllStreamEvent)
+  }
+  return rest
 }
 
 export async function enableAll(params: UpstreamAccountMonitorListParams = {}): Promise<UpstreamAccountMonitorBatchResponse> {
@@ -119,6 +208,16 @@ export async function enableAll(params: UpstreamAccountMonitorListParams = {}): 
 
 export async function disableAll(params: UpstreamAccountMonitorListParams = {}): Promise<UpstreamAccountMonitorBatchResponse> {
   const { data } = await apiClient.post<UpstreamAccountMonitorBatchResponse>(`${BASE_PATH}/disable-all`, null, { params })
+  return data
+}
+
+export async function batchUpdateSettings(
+  params: UpstreamAccountMonitorBatchSettingsRequest,
+  filters: UpstreamAccountMonitorListParams = {}
+): Promise<UpstreamAccountMonitorBatchResponse> {
+  const { data } = await apiClient.post<UpstreamAccountMonitorBatchResponse>(`${BASE_PATH}/batch-settings`, params, {
+    params: filters,
+  })
   return data
 }
 
@@ -138,8 +237,10 @@ export async function updateSettings(
 const upstreamAccountMonitorAPI = {
   list,
   runAll,
+  runAllStream,
   enableAll,
   disableAll,
+  batchUpdateSettings,
   runOne,
   updateSettings,
 }

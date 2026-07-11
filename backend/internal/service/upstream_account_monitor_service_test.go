@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -307,6 +308,422 @@ func TestUpstreamAccountMonitorListReturns7dAnd15dAvailability(t *testing.T) {
 	require.True(t, resultRepo.statsSince[1].Before(resultRepo.statsSince[0]))
 }
 
+func TestUpstreamAccountMonitorListFiltersByMonitorStatusHealth(t *testing.T) {
+	ctx := context.Background()
+	fast := Account{ID: 1, Name: "openai-fast", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	slow := Account{ID: 2, Name: "openai-slow", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	failing := Account{ID: 3, Name: "openai-fail", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	fastPlan := &ScheduledTestPlan{ID: 11, AccountID: fast.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	slowPlan := &ScheduledTestPlan{ID: 12, AccountID: slow.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	failPlan := &ScheduledTestPlan{ID: 13, AccountID: failing.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+
+	cases := []struct {
+		status string
+		wantID int64
+	}{
+		{status: MonitorStatusOperational, wantID: fast.ID},
+		{status: MonitorStatusDegraded, wantID: slow.ID},
+		{status: MonitorStatusFailed, wantID: failing.ID},
+	}
+	for _, tc := range cases {
+		accountRepo := &upstreamMonitorAccountRepo{accounts: []Account{fast, slow, failing}}
+		svc := NewUpstreamAccountMonitorService(
+			accountRepo,
+			newUpstreamMonitorPlanRepo(cloneScheduledTestPlan(fastPlan), cloneScheduledTestPlan(slowPlan), cloneScheduledTestPlan(failPlan)),
+			&upstreamMonitorResultRepo{
+				latest: map[int64]*ScheduledTestResult{
+					fastPlan.ID: {PlanID: fastPlan.ID, Status: "success", LatencyMs: 100},
+					slowPlan.ID: {PlanID: slowPlan.ID, Status: "success", LatencyMs: upstreamAccountMonitorDegradedLatencyMs},
+					failPlan.ID: {PlanID: failPlan.ID, Status: "failed", ErrorMessage: "model unavailable"},
+				},
+			},
+			nil,
+		)
+
+		resp, err := svc.List(ctx, UpstreamAccountMonitorListParams{
+			Page:     1,
+			PageSize: 20,
+			UpstreamAccountMonitorBatchParams: UpstreamAccountMonitorBatchParams{
+				MonitorStatus: tc.status,
+			},
+		})
+
+		require.NoError(t, err)
+		require.Equal(t, int64(1), resp.Total)
+		require.Len(t, resp.Items, 1)
+		require.Equal(t, tc.wantID, resp.Items[0].AccountID)
+		require.NotEmpty(t, accountRepo.calls)
+		require.Empty(t, accountRepo.calls[0].Status, "monitor_status must not be sent as an account status filter")
+	}
+}
+
+func TestUpstreamAccountMonitorListSortsByAvailabilityBeforePagination(t *testing.T) {
+	ctx := context.Background()
+	alpha := Account{ID: 1, Name: "alpha", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	beta := Account{ID: 2, Name: "beta", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	gamma := Account{ID: 3, Name: "gamma", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	alphaPlan := &ScheduledTestPlan{ID: 11, AccountID: alpha.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	betaPlan := &ScheduledTestPlan{ID: 12, AccountID: beta.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	gammaPlan := &ScheduledTestPlan{ID: 13, AccountID: gamma.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	resultRepo := &upstreamMonitorResultRepo{
+		statsSequence: []map[int64]*ScheduledTestPlanStats{
+			{
+				alphaPlan.ID: {PlanID: alphaPlan.ID, Total: 10, Success: 5, Availability7d: 50},
+				betaPlan.ID:  {PlanID: betaPlan.ID, Total: 10, Success: 9, Availability7d: 90},
+				gammaPlan.ID: {PlanID: gammaPlan.ID, Total: 10, Success: 1, Availability7d: 10},
+			},
+			{},
+		},
+	}
+	svc := NewUpstreamAccountMonitorService(
+		&upstreamMonitorAccountRepo{accounts: []Account{alpha, beta, gamma}},
+		newUpstreamMonitorPlanRepo(alphaPlan, betaPlan, gammaPlan),
+		resultRepo,
+		nil,
+	)
+
+	resp, err := svc.List(ctx, UpstreamAccountMonitorListParams{
+		Page:               1,
+		PageSize:           2,
+		SortBy:             "availability",
+		SortOrder:          pagination.SortOrderAsc,
+		AvailabilityWindow: "7d",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(3), resp.Total)
+	require.Len(t, resp.Items, 2)
+	require.Equal(t, []int64{gamma.ID, alpha.ID}, []int64{resp.Items[0].AccountID, resp.Items[1].AccountID})
+	require.NotNil(t, resp.Items[0].Availability7d)
+	require.Equal(t, 10.0, *resp.Items[0].Availability7d)
+}
+
+func TestUpstreamAccountMonitorListFiltersByMonitorStatusBeforeAvailabilitySortAndPagination(t *testing.T) {
+	ctx := context.Background()
+	fast := Account{ID: 1, Name: "fast", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	slowLow := Account{ID: 2, Name: "slow-low", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	slowHigh := Account{ID: 3, Name: "slow-high", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	failing := Account{ID: 4, Name: "failing", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	fastPlan := &ScheduledTestPlan{ID: 11, AccountID: fast.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	slowLowPlan := &ScheduledTestPlan{ID: 12, AccountID: slowLow.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	slowHighPlan := &ScheduledTestPlan{ID: 13, AccountID: slowHigh.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	failPlan := &ScheduledTestPlan{ID: 14, AccountID: failing.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	resultRepo := &upstreamMonitorResultRepo{
+		latest: map[int64]*ScheduledTestResult{
+			fastPlan.ID:     {PlanID: fastPlan.ID, Status: "success", LatencyMs: 100},
+			slowLowPlan.ID:  {PlanID: slowLowPlan.ID, Status: "success", LatencyMs: upstreamAccountMonitorDegradedLatencyMs},
+			slowHighPlan.ID: {PlanID: slowHighPlan.ID, Status: "success", LatencyMs: upstreamAccountMonitorDegradedLatencyMs + 1000},
+			failPlan.ID:     {PlanID: failPlan.ID, Status: "failed", ErrorMessage: "model unavailable"},
+		},
+		statsSequence: []map[int64]*ScheduledTestPlanStats{
+			{
+				slowLowPlan.ID:  {PlanID: slowLowPlan.ID, Total: 10, Success: 2, Availability7d: 20},
+				slowHighPlan.ID: {PlanID: slowHighPlan.ID, Total: 10, Success: 9, Availability7d: 90},
+			},
+			{},
+		},
+	}
+	svc := NewUpstreamAccountMonitorService(
+		&upstreamMonitorAccountRepo{accounts: []Account{fast, slowLow, slowHigh, failing}},
+		newUpstreamMonitorPlanRepo(fastPlan, slowLowPlan, slowHighPlan, failPlan),
+		resultRepo,
+		nil,
+	)
+
+	resp, err := svc.List(ctx, UpstreamAccountMonitorListParams{
+		Page:               1,
+		PageSize:           1,
+		SortBy:             "availability",
+		SortOrder:          pagination.SortOrderDesc,
+		AvailabilityWindow: "7d",
+		UpstreamAccountMonitorBatchParams: UpstreamAccountMonitorBatchParams{
+			MonitorStatus: MonitorStatusDegraded,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(2), resp.Total)
+	require.Len(t, resp.Items, 1)
+	require.Equal(t, slowHigh.ID, resp.Items[0].AccountID)
+	require.NotNil(t, resp.Items[0].Availability7d)
+	require.Equal(t, 90.0, *resp.Items[0].Availability7d)
+}
+
+func TestUpstreamAccountMonitorListAvailabilitySortCapsPageSize(t *testing.T) {
+	ctx := context.Background()
+	account := Account{ID: 1, Name: "alpha", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	plan := &ScheduledTestPlan{ID: 11, AccountID: account.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	svc := NewUpstreamAccountMonitorService(
+		&upstreamMonitorAccountRepo{accounts: []Account{account}},
+		newUpstreamMonitorPlanRepo(plan),
+		&upstreamMonitorResultRepo{
+			statsSequence: []map[int64]*ScheduledTestPlanStats{
+				{plan.ID: {PlanID: plan.ID, Total: 1, Success: 1, Availability7d: 100}},
+				{},
+			},
+		},
+		nil,
+	)
+
+	resp, err := svc.List(ctx, UpstreamAccountMonitorListParams{
+		Page:     1,
+		PageSize: 100000,
+		SortBy:   "availability",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1000, resp.PageSize)
+	require.Equal(t, int64(1), resp.Total)
+	require.Len(t, resp.Items, 1)
+}
+
+func TestUpstreamAccountMonitorListSortsAvailabilityNullLastAndTiesByNameID(t *testing.T) {
+	ctx := context.Background()
+	nullAccount := Account{ID: 4, Name: "null-account", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	beta := Account{ID: 2, Name: "beta", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	alpha := Account{ID: 3, Name: "alpha", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	delta := Account{ID: 1, Name: "delta", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	nullPlan := &ScheduledTestPlan{ID: 14, AccountID: nullAccount.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	betaPlan := &ScheduledTestPlan{ID: 12, AccountID: beta.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	alphaPlan := &ScheduledTestPlan{ID: 13, AccountID: alpha.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	deltaPlan := &ScheduledTestPlan{ID: 11, AccountID: delta.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	svc := NewUpstreamAccountMonitorService(
+		&upstreamMonitorAccountRepo{accounts: []Account{nullAccount, beta, alpha, delta}},
+		newUpstreamMonitorPlanRepo(nullPlan, betaPlan, alphaPlan, deltaPlan),
+		&upstreamMonitorResultRepo{
+			statsSequence: []map[int64]*ScheduledTestPlanStats{
+				{
+					betaPlan.ID:  {PlanID: betaPlan.ID, Total: 10, Success: 9, Availability7d: 90},
+					alphaPlan.ID: {PlanID: alphaPlan.ID, Total: 10, Success: 9, Availability7d: 90},
+					deltaPlan.ID: {PlanID: deltaPlan.ID, Total: 10, Success: 1, Availability7d: 10},
+				},
+				{},
+			},
+		},
+		nil,
+	)
+
+	resp, err := svc.List(ctx, UpstreamAccountMonitorListParams{
+		Page:               1,
+		PageSize:           4,
+		SortBy:             "availability",
+		SortOrder:          pagination.SortOrderDesc,
+		AvailabilityWindow: "7d",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resp.Items, 4)
+	require.Equal(t, []int64{alpha.ID, beta.ID, delta.ID, nullAccount.ID}, []int64{
+		resp.Items[0].AccountID,
+		resp.Items[1].AccountID,
+		resp.Items[2].AccountID,
+		resp.Items[3].AccountID,
+	})
+	require.Nil(t, resp.Items[3].Availability7d)
+}
+
+func TestUpstreamAccountMonitorListSortsBy15dAvailabilityWindow(t *testing.T) {
+	ctx := context.Background()
+	alpha := Account{ID: 1, Name: "alpha", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	beta := Account{ID: 2, Name: "beta", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	alphaPlan := &ScheduledTestPlan{ID: 11, AccountID: alpha.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	betaPlan := &ScheduledTestPlan{ID: 12, AccountID: beta.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	resultRepo := &upstreamMonitorResultRepo{
+		statsSequence: []map[int64]*ScheduledTestPlanStats{
+			{
+				alphaPlan.ID: {PlanID: alphaPlan.ID, Total: 10, Success: 2, Availability7d: 20},
+				betaPlan.ID:  {PlanID: betaPlan.ID, Total: 10, Success: 8, Availability7d: 80},
+			},
+			{},
+		},
+	}
+	svc := NewUpstreamAccountMonitorService(
+		&upstreamMonitorAccountRepo{accounts: []Account{alpha, beta}},
+		newUpstreamMonitorPlanRepo(alphaPlan, betaPlan),
+		resultRepo,
+		nil,
+	)
+
+	resp, err := svc.List(ctx, UpstreamAccountMonitorListParams{
+		Page:               1,
+		PageSize:           20,
+		SortBy:             "availability",
+		SortOrder:          pagination.SortOrderDesc,
+		AvailabilityWindow: "15d",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{beta.ID, alpha.ID}, []int64{resp.Items[0].AccountID, resp.Items[1].AccountID})
+	require.NotNil(t, resp.Items[0].Availability15d)
+	require.Equal(t, 80.0, *resp.Items[0].Availability15d)
+	require.Len(t, resultRepo.statsSince, 2)
+	require.True(t, resultRepo.statsSince[0].Before(time.Now().AddDate(0, 0, -14)))
+}
+
+func TestUpstreamAccountMonitorEnableAllRespectsMonitorStatusFilter(t *testing.T) {
+	ctx := context.Background()
+	passing := Account{ID: 1, Name: "openai-pass", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	failing := Account{ID: 2, Name: "openai-fail", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	passPlan := &ScheduledTestPlan{ID: 11, AccountID: passing.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: false}
+	failPlan := &ScheduledTestPlan{ID: 12, AccountID: failing.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: false}
+	svc := NewUpstreamAccountMonitorService(
+		&upstreamMonitorAccountRepo{accounts: []Account{passing, failing}},
+		newUpstreamMonitorPlanRepo(passPlan, failPlan),
+		&upstreamMonitorResultRepo{
+			latest: map[int64]*ScheduledTestResult{
+				passPlan.ID: {PlanID: passPlan.ID, Status: "success", LatencyMs: 100},
+				failPlan.ID: {PlanID: failPlan.ID, Status: "failed", ErrorMessage: "model unavailable"},
+			},
+		},
+		nil,
+	)
+
+	resp, err := svc.EnableAll(ctx, UpstreamAccountMonitorBatchParams{MonitorStatus: MonitorStatusFailed})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, resp.Total)
+	require.Equal(t, 1, resp.Enabled)
+	require.False(t, passPlan.Enabled)
+	require.True(t, failPlan.Enabled)
+}
+
+func TestUpstreamAccountMonitorDisableAllRespectsMonitorStatusFilter(t *testing.T) {
+	ctx := context.Background()
+	passing := Account{ID: 1, Name: "openai-pass", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	failing := Account{ID: 2, Name: "openai-fail", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	passPlan := &ScheduledTestPlan{ID: 11, AccountID: passing.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	failPlan := &ScheduledTestPlan{ID: 12, AccountID: failing.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	svc := NewUpstreamAccountMonitorService(
+		&upstreamMonitorAccountRepo{accounts: []Account{passing, failing}},
+		newUpstreamMonitorPlanRepo(passPlan, failPlan),
+		&upstreamMonitorResultRepo{
+			latest: map[int64]*ScheduledTestResult{
+				passPlan.ID: {PlanID: passPlan.ID, Status: "success", LatencyMs: 100},
+				failPlan.ID: {PlanID: failPlan.ID, Status: "failed", ErrorMessage: "model unavailable"},
+			},
+		},
+		nil,
+	)
+
+	resp, err := svc.DisableAll(ctx, UpstreamAccountMonitorBatchParams{MonitorStatus: MonitorStatusFailed})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, resp.Total)
+	require.Equal(t, 1, resp.Disabled)
+	require.True(t, passPlan.Enabled)
+	require.False(t, failPlan.Enabled)
+}
+
+func TestUpstreamAccountMonitorRunAllRespectsMonitorStatusFilter(t *testing.T) {
+	ctx := context.Background()
+	passing := Account{ID: 1, Name: "openai-pass", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	failing := Account{ID: 2, Name: "openai-fail", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	passPlan := &ScheduledTestPlan{ID: 11, AccountID: passing.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	failPlan := &ScheduledTestPlan{ID: 12, AccountID: failing.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	testSvc := &upstreamMonitorTestSvc{
+		results: map[int64]*ScheduledTestResult{
+			passing.ID: {Status: "success", LatencyMs: 100},
+			failing.ID: {Status: "success", LatencyMs: 100},
+		},
+	}
+	svc := NewUpstreamAccountMonitorService(
+		&upstreamMonitorAccountRepo{accounts: []Account{passing, failing}},
+		newUpstreamMonitorPlanRepo(passPlan, failPlan),
+		&upstreamMonitorResultRepo{
+			latest: map[int64]*ScheduledTestResult{
+				passPlan.ID: {PlanID: passPlan.ID, Status: "success", LatencyMs: 100},
+				failPlan.ID: {PlanID: failPlan.ID, Status: "failed", ErrorMessage: "model unavailable"},
+			},
+		},
+		testSvc,
+	)
+
+	resp, err := svc.RunAll(ctx, UpstreamAccountMonitorBatchParams{MonitorStatus: MonitorStatusFailed})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, resp.Total)
+	require.Equal(t, 1, resp.Success)
+	require.ElementsMatch(t, []int64{failing.ID}, testSvc.accountIDs())
+}
+
+func TestUpstreamAccountMonitorBatchUpdateSettingsRespectsMonitorStatusFilter(t *testing.T) {
+	ctx := context.Background()
+	passing := Account{ID: 1, Name: "openai-pass", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	failing := Account{ID: 2, Name: "openai-fail", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	passPlan := &ScheduledTestPlan{ID: 11, AccountID: passing.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	failPlan := &ScheduledTestPlan{ID: 12, AccountID: failing.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	svc := NewUpstreamAccountMonitorService(
+		&upstreamMonitorAccountRepo{accounts: []Account{passing, failing}},
+		newUpstreamMonitorPlanRepo(passPlan, failPlan),
+		&upstreamMonitorResultRepo{
+			latest: map[int64]*ScheduledTestResult{
+				passPlan.ID: {PlanID: passPlan.ID, Status: "success", LatencyMs: 100},
+				failPlan.ID: {PlanID: failPlan.ID, Status: "failed", ErrorMessage: "model unavailable"},
+			},
+		},
+		nil,
+	)
+	interval := 15
+	jitter := 30
+
+	resp, err := svc.BatchUpdateSettings(ctx, UpstreamAccountMonitorBatchParams{MonitorStatus: MonitorStatusFailed}, UpstreamAccountMonitorBatchSettingsRequest{
+		IntervalMinutes: &interval,
+		JitterSeconds:   &jitter,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, resp.Total)
+	require.Equal(t, 1, resp.Updated)
+	require.Equal(t, defaultUpstreamAccountMonitorInterval, passPlan.IntervalMinutes)
+	require.Equal(t, interval, failPlan.IntervalMinutes)
+	require.Equal(t, jitter, failPlan.JitterSeconds)
+	require.NotNil(t, failPlan.NextRunAt)
+}
+
+func TestUpstreamAccountMonitorStreamRunAllEmitsItemEvents(t *testing.T) {
+	ctx := context.Background()
+	accountOne := Account{ID: 1, Name: "openai-one", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	accountTwo := Account{ID: 2, Name: "openai-two", Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Status: StatusActive}
+	planOne := &ScheduledTestPlan{ID: 11, AccountID: accountOne.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	planTwo := &ScheduledTestPlan{ID: 12, AccountID: accountTwo.ID, Purpose: ScheduledTestPlanPurposeUpstreamMonitor, IntervalMinutes: defaultUpstreamAccountMonitorInterval, Enabled: true}
+	svc := NewUpstreamAccountMonitorService(
+		&upstreamMonitorAccountRepo{accounts: []Account{accountOne, accountTwo}},
+		newUpstreamMonitorPlanRepo(planOne, planTwo),
+		&upstreamMonitorResultRepo{},
+		&upstreamMonitorTestSvc{
+			results: map[int64]*ScheduledTestResult{
+				accountOne.ID: {Status: "success", LatencyMs: 100},
+				accountTwo.ID: {Status: "failed", ErrorMessage: "model unavailable"},
+			},
+		},
+	)
+
+	events, err := svc.StreamRunAll(ctx, UpstreamAccountMonitorBatchParams{})
+
+	require.NoError(t, err)
+	var got []UpstreamAccountMonitorRunAllStreamEvent
+	for event := range events {
+		got = append(got, event)
+	}
+	require.NotEmpty(t, got)
+	require.Equal(t, "started", got[0].Type)
+	require.Equal(t, 2, got[0].Total)
+	var itemCount int
+	var done *UpstreamAccountMonitorRunAllStreamEvent
+	for i := range got {
+		if got[i].Type == "item" {
+			itemCount++
+		}
+		if got[i].Type == "done" {
+			done = &got[i]
+		}
+	}
+	require.Equal(t, 2, itemCount)
+	require.NotNil(t, done)
+	require.Equal(t, 1, done.Success)
+	require.Equal(t, 1, done.Failed)
+}
+
 func TestUpstreamAccountMonitorEnableAllRespectsFilters(t *testing.T) {
 	ctx := context.Background()
 	groupOne := &Group{ID: 1, Name: "group-one"}
@@ -491,6 +908,14 @@ func TestUpstreamAccountMonitorListInitializesUnschedulableAccountDisabled(t *te
 	plans := planRepo.byAccountAndPurpose(paused.ID, ScheduledTestPlanPurposeUpstreamMonitor)
 	require.Len(t, plans, 1)
 	require.False(t, plans[0].Enabled)
+}
+
+func cloneScheduledTestPlan(plan *ScheduledTestPlan) *ScheduledTestPlan {
+	if plan == nil {
+		return nil
+	}
+	cloned := *plan
+	return &cloned
 }
 
 type upstreamMonitorAccountRepo struct {
@@ -684,10 +1109,25 @@ func (r *upstreamMonitorPlanRepo) byAccountAndPurpose(accountID int64, purpose s
 
 type upstreamMonitorResultRepo struct {
 	ScheduledTestResultRepository
+	mu            sync.Mutex
 	statsSequence []map[int64]*ScheduledTestPlanStats
 	statsSince    []time.Time
 	latest        map[int64]*ScheduledTestResult
 	recent        map[int64][]*ScheduledTestResult
+	created       []*ScheduledTestResult
+}
+
+func (r *upstreamMonitorResultRepo) Create(_ context.Context, result *ScheduledTestResult) (*ScheduledTestResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if result.ID == 0 {
+		result.ID = int64(len(r.created) + 1)
+	}
+	if result.CreatedAt.IsZero() {
+		result.CreatedAt = time.Now()
+	}
+	r.created = append(r.created, result)
+	return result, nil
 }
 
 func (r *upstreamMonitorResultRepo) ListLatestByPlanIDs(_ context.Context, planIDs []int64) (map[int64]*ScheduledTestResult, error) {
@@ -705,6 +1145,8 @@ func (r *upstreamMonitorResultRepo) ListRecentByPlanIDs(_ context.Context, planI
 }
 
 func (r *upstreamMonitorResultRepo) Stats7dByPlanIDs(_ context.Context, _ []int64, since time.Time) (map[int64]*ScheduledTestPlanStats, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.statsSince = append(r.statsSince, since)
 	if len(r.statsSequence) == 0 {
 		return map[int64]*ScheduledTestPlanStats{}, nil
@@ -712,4 +1154,48 @@ func (r *upstreamMonitorResultRepo) Stats7dByPlanIDs(_ context.Context, _ []int6
 	stats := r.statsSequence[0]
 	r.statsSequence = r.statsSequence[1:]
 	return stats, nil
+}
+
+func (r *upstreamMonitorResultRepo) PruneOldResults(_ context.Context, _ int64, _ int) error {
+	return nil
+}
+
+type upstreamMonitorTestSvc struct {
+	mu      sync.Mutex
+	results map[int64]*ScheduledTestResult
+	calls   []int64
+}
+
+func (s *upstreamMonitorTestSvc) RunTestBackgroundWithEndpointPing(_ context.Context, accountID int64, _ string) (*ScheduledTestResult, error) {
+	s.mu.Lock()
+	s.calls = append(s.calls, accountID)
+	result := s.results[accountID]
+	s.mu.Unlock()
+	if result != nil {
+		resultCopy := *result
+		result = &resultCopy
+		now := time.Now()
+		if result.StartedAt.IsZero() {
+			result.StartedAt = now
+		}
+		if result.FinishedAt.IsZero() {
+			result.FinishedAt = now
+		}
+		return result, nil
+	}
+	now := time.Now()
+	return &ScheduledTestResult{
+		Status:     "success",
+		LatencyMs:  100,
+		StartedAt:  now,
+		FinishedAt: now,
+	}, nil
+}
+
+func (s *upstreamMonitorTestSvc) accountIDs() []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]int64, len(s.calls))
+	copy(out, s.calls)
+	return out
 }

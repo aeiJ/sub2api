@@ -18,7 +18,7 @@
                 :class="currentWindow === option.value
                   ? 'bg-white font-semibold text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white'
                   : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'"
-                @click="currentWindow = option.value"
+                @click="handleWindowChange(option.value)"
               >
                 {{ option.label }}
               </button>
@@ -29,7 +29,7 @@
               :class="overallChipClass"
             >
               <span class="mr-1.5 h-1.5 w-1.5 rounded-full animate-pulse" :class="overallDotClass"></span>
-              {{ t(`channelStatus.overall.${overallStatus}`) }}
+              {{ t(`admin.upstreamAccountMonitor.overall.${overallStatus}`) }}
             </span>
 
             <button
@@ -64,24 +64,18 @@
             <Select v-model="platformFilter" class="w-44" :options="platformOptions" @change="reloadFirstPage" />
             <Select v-model="statusFilter" class="w-40" :options="statusOptions" @change="reloadFirstPage" />
             <Select v-model="groupFilter" class="w-44" :options="groupOptions" @change="reloadFirstPage" />
+            <Select v-model="availabilitySort" class="w-48" :options="availabilitySortOptions" @change="reloadFirstPage" />
           </div>
 
           <div class="flex w-full flex-shrink-0 flex-wrap items-center justify-end gap-3 lg:w-auto">
-            <div
-              class="inline-flex h-10 items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 shadow-sm dark:border-dark-700 dark:bg-dark-800 dark:text-gray-200"
-              :class="batchAction === 'enableAll' || batchAction === 'disableAll' ? 'opacity-70' : ''"
+            <button
+              type="button"
+              class="btn btn-primary"
+              :disabled="loading"
+              @click="openBatchDialog"
             >
-              <span>{{ allMonitorsEnabled ? t('admin.upstreamAccountMonitor.fullDisableMonitoring') : t('admin.upstreamAccountMonitor.fullEnableMonitoring') }}</span>
-              <Toggle
-                :model-value="allMonitorsEnabled"
-                :disabled="batchRunning || loading"
-                @update:modelValue="toggleAllMonitoring"
-              />
-            </div>
-
-            <button class="btn btn-primary" :disabled="batchRunning || loading" @click="runAll">
-              <Icon :name="batchAction === 'runAll' ? 'refresh' : 'play'" size="md" class="mr-2" :class="{ 'animate-spin': batchAction === 'runAll' }" />
-              {{ batchAction === 'runAll' ? t('admin.upstreamAccountMonitor.checking') : t('admin.upstreamAccountMonitor.runAll') }}
+              <Icon name="cog" size="md" class="mr-2" />
+              {{ t('admin.upstreamAccountMonitor.batch.open') }}
             </button>
           </div>
         </div>
@@ -193,9 +187,9 @@
 
               <span
                 class="flex-shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold"
-                :class="resultStatusPillClass(row)"
+                :class="statusBadgeClass(monitorHealthStatus(row))"
               >
-                {{ resultStatusLabel(row) }}
+                {{ monitorHealthStatusLabel(monitorHealthStatus(row)) }}
               </span>
             </header>
 
@@ -209,15 +203,6 @@
               :secondary-value="formatLatency(row.latest_result?.ping_latency_ms)"
               secondary-unit="ms"
             />
-
-            <div class="mt-3 flex flex-wrap gap-1.5">
-              <span class="monitor-chip" :class="resultStatusPillClass(row)">
-                {{ resultStatusLabel(row) }}
-              </span>
-              <span class="monitor-chip" :class="row.monitor_enabled ? enabledPillClass : disabledPillClass">
-                {{ row.monitor_enabled ? t('admin.upstreamAccountMonitor.enabled') : t('admin.upstreamAccountMonitor.disabled') }}
-              </span>
-            </div>
 
             <div class="mt-2.5 flex items-center justify-between gap-2 rounded-lg bg-gray-50 px-2.5 py-1.5 dark:bg-dark-900/30">
               <div class="min-w-0">
@@ -321,6 +306,112 @@
       </div>
 
       <div
+        v-if="batchDialogOpen"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+        @click.self="closeBatchDialog"
+      >
+        <div class="w-full max-w-xl rounded-2xl border border-gray-200 bg-white p-6 shadow-card dark:border-dark-700 dark:bg-dark-800">
+          <div class="mb-5 flex items-start justify-between gap-4">
+            <div>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                {{ t('admin.upstreamAccountMonitor.batch.title') }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ batchScopeLabel }}
+              </p>
+            </div>
+            <button
+              type="button"
+              class="rounded-lg p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700 dark:hover:text-gray-200"
+              @click="closeBatchDialog"
+            >
+              <Icon name="x" size="md" />
+            </button>
+          </div>
+
+          <div class="grid gap-4">
+            <section class="rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div class="text-sm font-semibold text-gray-800 dark:text-gray-100">
+                    {{ t('admin.upstreamAccountMonitor.batch.checkTitle') }}
+                  </div>
+                  <div class="text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('admin.upstreamAccountMonitor.batch.checkDescription') }}
+                  </div>
+                </div>
+                <div class="flex flex-wrap justify-end gap-2">
+                  <button type="button" class="btn btn-primary" :disabled="batchRunning || loading" @click="runAll">
+                    <Icon :name="batchAction === 'runAll' ? 'refresh' : 'play'" size="sm" class="mr-2" :class="{ 'animate-spin': batchAction === 'runAll' }" />
+                    {{ batchAction === 'runAll' ? t('admin.upstreamAccountMonitor.checking') : batchRunLabel }}
+                  </button>
+                  <button v-if="batchAction === 'runAll'" type="button" class="btn btn-secondary" @click="cancelRunAll">
+                    {{ t('common.cancel') }}
+                  </button>
+                </div>
+              </div>
+              <div v-if="batchAction === 'runAll' || batchProgress.total > 0" class="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-600 dark:bg-dark-900/40 dark:text-gray-300">
+                {{ t('admin.upstreamAccountMonitor.batch.progress', {
+                  completed: batchProgress.completed,
+                  total: batchProgress.total,
+                  success: batchProgress.success,
+                  failed: batchProgress.failed
+                }) }}
+              </div>
+            </section>
+
+            <section class="rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+              <div class="mb-3">
+                <div class="text-sm font-semibold text-gray-800 dark:text-gray-100">
+                  {{ t('admin.upstreamAccountMonitor.batch.monitorTitle') }}
+                </div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.upstreamAccountMonitor.batch.monitorDescription') }}
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <button type="button" class="btn btn-secondary" :disabled="batchRunning || loading" @click="enableAll">
+                  <Icon name="check" size="sm" class="mr-2" />
+                  {{ batchEnableLabel }}
+                </button>
+                <button type="button" class="btn btn-secondary" :disabled="batchRunning || loading" @click="disableAll">
+                  <Icon name="x" size="sm" class="mr-2" />
+                  {{ batchDisableLabel }}
+                </button>
+              </div>
+            </section>
+
+            <section class="rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+              <div class="mb-3">
+                <div class="text-sm font-semibold text-gray-800 dark:text-gray-100">
+                  {{ t('admin.upstreamAccountMonitor.batch.intervalTitle') }}
+                </div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.upstreamAccountMonitor.batch.intervalDescription') }}
+                </div>
+              </div>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label class="input-label">{{ t('admin.upstreamAccountMonitor.settings.intervalMinutes') }}</label>
+                  <input v-model.number="batchSettingsForm.interval_minutes" class="input" type="number" min="1" max="1440" />
+                </div>
+                <div>
+                  <label class="input-label">{{ t('admin.upstreamAccountMonitor.settings.jitterSeconds') }}</label>
+                  <input v-model.number="batchSettingsForm.jitter_seconds" class="input" type="number" min="0" :max="batchJitterMax" />
+                </div>
+              </div>
+              <div class="mt-4 flex justify-end">
+                <button type="button" class="btn btn-primary" :disabled="batchRunning || loading" @click="applyBatchInterval">
+                  <Icon name="check" size="sm" class="mr-2" />
+                  {{ batchIntervalLabel }}
+                </button>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+
+      <div
         v-if="settingsDialogOpen"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
         @click.self="closeSettings"
@@ -405,7 +496,10 @@ import type {
   UpstreamAccountMonitorBatchResponse,
   UpstreamAccountMonitorItem,
   UpstreamAccountMonitorListParams,
+  UpstreamAccountMonitorRunAllStreamEvent,
+  UpstreamAccountMonitorStatus,
 } from '@/api/admin/upstreamAccountMonitor'
+import type { MonitorStatus } from '@/api/admin/channelMonitor'
 import type { AdminGroup } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -424,27 +518,32 @@ import {
   providerGradient,
   useChannelMonitorFormat,
 } from '@/composables/useChannelMonitorFormat'
+import {
+  STATUS_DEGRADED,
+  STATUS_FAILED,
+  STATUS_OPERATIONAL,
+} from '@/constants/channelMonitor'
 import type { ClaudeModel } from '@/types'
 
 const { t } = useI18n()
 const appStore = useAppStore()
-const { providerBadgeClass, formatLatency } = useChannelMonitorFormat()
+const { providerBadgeClass, formatLatency, statusBadgeClass } = useChannelMonitorFormat()
 
 const items = ref<UpstreamAccountMonitorItem[]>([])
 const groups = ref<AdminGroup[]>([])
 const loading = ref(false)
 const searchQuery = ref('')
 const platformFilter = ref('')
-const statusFilter = ref('')
+const statusFilter = ref<UpstreamAccountMonitorStatus | ''>('')
 const groupFilter = ref('')
 const currentWindow = ref<UpstreamMonitorWindow>('7d')
-const batchAction = ref<'runAll' | 'enableAll' | 'disableAll' | null>(null)
+const availabilitySort = ref<AvailabilitySort>('')
+const batchAction = ref<'runAll' | 'enableAll' | 'disableAll' | 'settings' | null>(null)
 const runningAccountId = ref<number | null>(null)
 const autoRecoverSavingAccountId = ref<number | null>(null)
 const monitorToggleSavingAccountId = ref<number | null>(null)
 const pagination = reactive({ page: 1, page_size: getPersistedPageSize(), total: 0 })
-const monitorEnabledTotal = ref(0)
-const monitorDisabledTotal = ref(0)
+const batchDialogOpen = ref(false)
 const settingsDialogOpen = ref(false)
 const savingSettings = ref(false)
 const loadingModelOptions = ref(false)
@@ -456,25 +555,66 @@ const settingsForm = reactive({
   jitter_seconds: 0,
   auto_recover: false,
 })
+const batchSettingsForm = reactive({
+  interval_minutes: 60,
+  jitter_seconds: 0,
+})
+const batchProgress = reactive({
+  total: 0,
+  completed: 0,
+  success: 0,
+  failed: 0,
+})
+const checkingAccountIds = ref<Set<number>>(new Set())
 
 let abortController: AbortController | null = null
 let searchTimeout: ReturnType<typeof setTimeout> | null = null
+let runAllAbortController: AbortController | null = null
 
 const batchRunning = computed(() => batchAction.value !== null)
 const settingsJitterMax = computed(() => Math.max(0, settingsForm.interval_minutes * 60 - 1))
+const batchJitterMax = computed(() => Math.max(0, batchSettingsForm.interval_minutes * 60 - 1))
 type UpstreamMonitorWindow = '7d' | '15d'
-const allMonitorsEnabled = computed(() => pagination.total > 0 && monitorDisabledTotal.value === 0)
+type AvailabilitySort = '' | 'asc' | 'desc'
+const hasActiveFilters = computed(() =>
+  Boolean(platformFilter.value || statusFilter.value || groupFilter.value || searchQuery.value.trim())
+)
+const batchScopeLabel = computed(() =>
+  hasActiveFilters.value
+    ? t('admin.upstreamAccountMonitor.batch.scopeFiltered')
+    : t('admin.upstreamAccountMonitor.batch.scopeAll')
+)
+const batchRunLabel = computed(() =>
+  hasActiveFilters.value
+    ? t('admin.upstreamAccountMonitor.batch.runFiltered')
+    : t('admin.upstreamAccountMonitor.batch.runAll')
+)
+const batchEnableLabel = computed(() =>
+  hasActiveFilters.value
+    ? t('admin.upstreamAccountMonitor.batch.enableFiltered')
+    : t('admin.upstreamAccountMonitor.batch.enableAll')
+)
+const batchDisableLabel = computed(() =>
+  hasActiveFilters.value
+    ? t('admin.upstreamAccountMonitor.batch.disableFiltered')
+    : t('admin.upstreamAccountMonitor.batch.disableAll')
+)
+const batchIntervalLabel = computed(() =>
+  hasActiveFilters.value
+    ? t('admin.upstreamAccountMonitor.batch.intervalFiltered')
+    : t('admin.upstreamAccountMonitor.batch.intervalAll')
+)
 
 const windowOptions = computed<{ value: UpstreamMonitorWindow; label: string }[]>(() => [
-  { value: '7d', label: t('channelStatus.windowTab.7d') },
-  { value: '15d', label: t('channelStatus.windowTab.15d') },
+  { value: '7d', label: t('admin.upstreamAccountMonitor.windowTab.7d') },
+  { value: '15d', label: t('admin.upstreamAccountMonitor.windowTab.15d') },
 ])
 
-const selectedWindowLabel = computed(() => t(`channelStatus.windowTab.${currentWindow.value}`))
+const selectedWindowLabel = computed(() => t(`admin.upstreamAccountMonitor.windowTab.${currentWindow.value}`))
 
 const overallStatus = computed<'operational' | 'degraded'>(() => {
   if (items.value.length === 0) return 'operational'
-  return items.value.some((item) => item.account_status === 'error' || resultStatusVariant(item) !== 'success')
+  return items.value.some((item) => item.account_status === 'error' || monitorHealthStatus(item) !== STATUS_OPERATIONAL)
     ? 'degraded'
     : 'operational'
 })
@@ -489,8 +629,7 @@ const overallDotClass = computed(() =>
   overallStatus.value === 'operational' ? 'bg-emerald-500' : 'bg-amber-500'
 )
 
-const enabledPillClass = 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
-const disabledPillClass = 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'
+const MONITOR_DEGRADED_LATENCY_MS = 6000
 
 const platformOptions = computed(() => [
   { value: '', label: t('admin.accounts.allPlatforms') },
@@ -503,14 +642,20 @@ const platformOptions = computed(() => [
 
 const statusOptions = computed(() => [
   { value: '', label: t('admin.accounts.allStatus') },
-  { value: 'active', label: t('admin.accounts.status.active') },
-  { value: 'inactive', label: t('admin.accounts.status.inactive') },
-  { value: 'error', label: t('admin.accounts.status.error') },
+  { value: STATUS_OPERATIONAL, label: t('admin.upstreamAccountMonitor.monitorStatus.operational') },
+  { value: STATUS_DEGRADED, label: t('admin.upstreamAccountMonitor.monitorStatus.degraded') },
+  { value: STATUS_FAILED, label: t('admin.upstreamAccountMonitor.monitorStatus.failed') },
 ])
 
 const groupOptions = computed(() => [
   { value: '', label: t('admin.accounts.allGroups') },
   ...groups.value.map((group) => ({ value: String(group.id), label: group.name })),
+])
+
+const availabilitySortOptions = computed(() => [
+  { value: '', label: t('admin.upstreamAccountMonitor.sort.default') },
+  { value: 'asc', label: t('admin.upstreamAccountMonitor.sort.availabilityAsc') },
+  { value: 'desc', label: t('admin.upstreamAccountMonitor.sort.availabilityDesc') },
 ])
 
 const modelOptions = computed(() => {
@@ -535,10 +680,20 @@ const modelOptions = computed(() => {
 function currentFilterParams(): UpstreamAccountMonitorListParams {
   return {
     platform: platformFilter.value || undefined,
-    status: statusFilter.value || undefined,
+    monitor_status: statusFilter.value || undefined,
     search: searchQuery.value.trim() || undefined,
     group_id: groupFilter.value || undefined,
   }
+}
+
+function currentListParams(): UpstreamAccountMonitorListParams {
+  const params: UpstreamAccountMonitorListParams = { ...currentFilterParams() }
+  if (availabilitySort.value) {
+    params.sort_by = 'availability'
+    params.sort_order = availabilitySort.value
+    params.availability_window = currentWindow.value
+  }
+  return params
 }
 
 async function reload() {
@@ -550,13 +705,11 @@ async function reload() {
     const res = await adminAPI.upstreamAccountMonitor.list({
       page: pagination.page,
       page_size: pagination.page_size,
-      ...currentFilterParams(),
+      ...currentListParams(),
     }, { signal: ctrl.signal })
     if (ctrl.signal.aborted || abortController !== ctrl) return
     items.value = res.items || []
     pagination.total = res.total
-    monitorEnabledTotal.value = res.monitor_enabled_total || 0
-    monitorDisabledTotal.value = res.monitor_disabled_total || 0
   } catch (error: any) {
     if (error?.name === 'AbortError' || error?.code === 'ERR_CANCELED') return
     appStore.showError(extractApiErrorMessage(error, t('admin.upstreamAccountMonitor.loadError')))
@@ -577,8 +730,17 @@ async function loadGroups() {
 }
 
 function reloadFirstPage() {
+  cancelRunAll()
   pagination.page = 1
   void reload()
+}
+
+function handleWindowChange(value: UpstreamMonitorWindow) {
+  if (currentWindow.value === value) return
+  currentWindow.value = value
+  if (availabilitySort.value) {
+    reloadFirstPage()
+  }
 }
 
 function handleSearch() {
@@ -597,7 +759,18 @@ function handlePageSizeChange(size: number) {
   void reload()
 }
 
-async function runBatch(action: 'runAll' | 'enableAll' | 'disableAll', request: () => Promise<UpstreamAccountMonitorBatchResponse>) {
+function openBatchDialog() {
+  batchSettingsForm.interval_minutes = 60
+  batchSettingsForm.jitter_seconds = 0
+  batchDialogOpen.value = true
+}
+
+function closeBatchDialog() {
+  if (batchAction.value && batchAction.value !== 'runAll') return
+  batchDialogOpen.value = false
+}
+
+async function runBatch(action: 'enableAll' | 'disableAll' | 'settings', request: () => Promise<UpstreamAccountMonitorBatchResponse>) {
   if (batchAction.value) return
   batchAction.value = action
   try {
@@ -612,24 +785,124 @@ async function runBatch(action: 'runAll' | 'enableAll' | 'disableAll', request: 
 }
 
 function runAll() {
-  void runBatch('runAll', () => adminAPI.upstreamAccountMonitor.runAll(currentFilterParams()))
+  if (batchAction.value) return
+  batchAction.value = 'runAll'
+  resetBatchProgress()
+  checkingAccountIds.value = new Set(items.value.map((item) => item.account_id))
+  const ctrl = new AbortController()
+  runAllAbortController = ctrl
+  void runAllStream(ctrl)
+}
+
+async function runAllStream(ctrl: AbortController) {
+  try {
+    await adminAPI.upstreamAccountMonitor.runAllStream(
+      currentFilterParams(),
+      handleRunAllStreamEvent,
+      { signal: ctrl.signal }
+    )
+    await reload()
+  } catch (error: any) {
+    if (error?.name !== 'AbortError') {
+      appStore.showError(extractApiErrorMessage(error, t('admin.upstreamAccountMonitor.batchError')))
+    }
+  } finally {
+    if (runAllAbortController === ctrl) {
+      runAllAbortController = null
+      checkingAccountIds.value = new Set()
+      batchAction.value = null
+    }
+  }
+}
+
+function handleRunAllStreamEvent(event: UpstreamAccountMonitorRunAllStreamEvent) {
+  if (event.type === 'started') {
+    batchProgress.total = event.total || 0
+    return
+  }
+  if (event.type === 'item') {
+    batchProgress.completed += 1
+    const failed = Boolean(event.error || !event.result || event.result.status !== 'success')
+    if (failed) batchProgress.failed += 1
+    else batchProgress.success += 1
+    updateRowFromRunEvent(event)
+    removeCheckingAccount(event.account_id)
+    return
+  }
+  if (event.type === 'done') {
+    batchProgress.total = event.total || batchProgress.total
+    batchProgress.success = event.success ?? batchProgress.success
+    batchProgress.failed = event.failed ?? batchProgress.failed
+    appStore.showSuccess(t('admin.upstreamAccountMonitor.runAllSuccess', {
+      success: batchProgress.success,
+      failed: batchProgress.failed,
+      total: batchProgress.total,
+    }))
+    return
+  }
+  if (event.type === 'error') {
+    appStore.showError(event.message || event.error || t('admin.upstreamAccountMonitor.batchError'))
+  }
+}
+
+function updateRowFromRunEvent(event: Extract<UpstreamAccountMonitorRunAllStreamEvent, { type: 'item' }>) {
+  const row = items.value.find((item) => item.account_id === event.account_id)
+  if (!row) return
+  if (typeof event.plan_id === 'number' && event.plan_id > 0) {
+    row.plan_id = event.plan_id
+  }
+  if (event.result) {
+    row.latest_result = event.result
+    row.last_run_at = event.result.finished_at || event.result.started_at || row.last_run_at
+  }
+}
+
+function removeCheckingAccount(accountId: number) {
+  const next = new Set(checkingAccountIds.value)
+  next.delete(accountId)
+  checkingAccountIds.value = next
+}
+
+function resetBatchProgress() {
+  batchProgress.total = 0
+  batchProgress.completed = 0
+  batchProgress.success = 0
+  batchProgress.failed = 0
+}
+
+function cancelRunAll() {
+  runAllAbortController?.abort()
 }
 
 function enableAll() {
-  void runBatch('enableAll', () => adminAPI.upstreamAccountMonitor.enableAll(currentFilterParams()))
+  void runBatch('enableAll', () => adminAPI.upstreamAccountMonitor.batchUpdateSettings({
+    monitor_enabled: true,
+  }, currentFilterParams()))
 }
 
 function disableAll() {
-  void runBatch('disableAll', () => adminAPI.upstreamAccountMonitor.disableAll(currentFilterParams()))
+  void runBatch('disableAll', () => adminAPI.upstreamAccountMonitor.batchUpdateSettings({
+    monitor_enabled: false,
+  }, currentFilterParams()))
 }
 
-function toggleAllMonitoring(value: boolean) {
-  if (value) enableAll()
-  else disableAll()
+function applyBatchInterval() {
+  if (batchSettingsForm.interval_minutes < 1 || batchSettingsForm.interval_minutes > 1440) {
+    appStore.showError(t('admin.upstreamAccountMonitor.settings.intervalInvalid'))
+    return
+  }
+  if (batchSettingsForm.jitter_seconds < 0 || batchSettingsForm.jitter_seconds >= batchSettingsForm.interval_minutes * 60) {
+    appStore.showError(t('admin.upstreamAccountMonitor.settings.jitterInvalid'))
+    return
+  }
+  void runBatch('settings', () => adminAPI.upstreamAccountMonitor.batchUpdateSettings({
+    interval_minutes: batchSettingsForm.interval_minutes,
+    jitter_seconds: batchSettingsForm.jitter_seconds,
+  }, currentFilterParams()))
 }
 
 function isChecking(row: UpstreamAccountMonitorItem): boolean {
-  return batchAction.value === 'runAll' || runningAccountId.value === row.account_id
+  return checkingAccountIds.value.has(row.account_id) || runningAccountId.value === row.account_id
 }
 
 async function runOne(accountId: number) {
@@ -759,23 +1032,23 @@ async function toggleMonitorEnabled(row: UpstreamAccountMonitorItem, value: bool
   }
 }
 
-function batchMessage(action: 'runAll' | 'enableAll' | 'disableAll', result: UpstreamAccountMonitorBatchResponse): string {
-  if (action === 'runAll') {
-    return t('admin.upstreamAccountMonitor.runAllSuccess', {
-      success: result.success ?? 0,
-      failed: result.failed ?? 0,
-      total: result.total ?? 0,
-    })
-  }
+function batchMessage(action: 'enableAll' | 'disableAll' | 'settings', result: UpstreamAccountMonitorBatchResponse): string {
   if (action === 'enableAll') {
     return t('admin.upstreamAccountMonitor.enableAllSuccess', {
-      enabled: result.enabled ?? 0,
+      enabled: result.enabled ?? result.updated ?? 0,
+      created: result.created ?? 0,
+      skipped: result.skipped ?? 0,
+    })
+  }
+  if (action === 'settings') {
+    return t('admin.upstreamAccountMonitor.batch.intervalSuccess', {
+      updated: result.updated ?? 0,
       created: result.created ?? 0,
       skipped: result.skipped ?? 0,
     })
   }
   return t('admin.upstreamAccountMonitor.disableAllSuccess', {
-    disabled: result.disabled ?? 0,
+    disabled: result.disabled ?? result.updated ?? 0,
     skipped: result.skipped ?? 0,
   })
 }
@@ -816,20 +1089,18 @@ function resultStatusVariant(row: UpstreamAccountMonitorItem): 'success' | 'erro
   return row.latest_result.status === 'success' ? 'success' : 'error'
 }
 
-function resultStatusPillClass(row: UpstreamAccountMonitorItem): string {
-  const variant = resultStatusVariant(row)
-  if (variant === 'success') return enabledPillClass
-  if (variant === 'error') return 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300'
-  if (variant === 'warning') return 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'
-  return disabledPillClass
+function monitorHealthStatus(row: UpstreamAccountMonitorItem): MonitorStatus | '' {
+  if (!row.plan_id || !row.latest_result) return ''
+  if (row.latest_result.status !== 'success') return STATUS_FAILED
+  return row.latest_result.latency_ms >= MONITOR_DEGRADED_LATENCY_MS ? STATUS_DEGRADED : STATUS_OPERATIONAL
 }
 
-function resultStatusLabel(row: UpstreamAccountMonitorItem): string {
-  if (!row.plan_id) return t('admin.upstreamAccountMonitor.notEnabled')
-  if (!row.latest_result) return t('admin.upstreamAccountMonitor.notChecked')
-  return row.latest_result.status === 'success'
-    ? t('admin.upstreamAccountMonitor.success')
-    : t('admin.upstreamAccountMonitor.failed')
+function monitorHealthStatusLabel(status: MonitorStatus | ''): string {
+  if (!status) return t('admin.upstreamAccountMonitor.notChecked')
+  if (status === STATUS_OPERATIONAL || status === STATUS_DEGRADED || status === STATUS_FAILED) {
+    return t(`admin.upstreamAccountMonitor.monitorStatus.${status}`)
+  }
+  return t('admin.upstreamAccountMonitor.notChecked')
 }
 
 function latestError(row: UpstreamAccountMonitorItem): string {
@@ -896,6 +1167,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  cancelRunAll()
   abortController?.abort()
   if (searchTimeout) clearTimeout(searchTimeout)
 })
@@ -948,10 +1220,6 @@ onUnmounted(() => {
 .checking-spinner {
   @apply h-3.5 w-3.5 rounded-full border-2 border-primary-200 border-t-primary-600 dark:border-primary-500/25 dark:border-t-primary-300;
   animation: checking-spin 0.8s linear infinite;
-}
-
-.monitor-chip {
-  @apply inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium;
 }
 
 @keyframes checking-spin {

@@ -8,6 +8,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"go.uber.org/zap"
 )
 
 // CodexModels serves the Codex models manifest for Codex clients.
@@ -30,11 +31,32 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 		return
 	}
 
-	account, err := h.gatewayService.SelectAccountForModel(c.Request.Context(), apiKey.GroupID, "", "")
+	reqLog := requestLogger(
+		c,
+		"handler.openai_gateway.codex_models",
+		zap.Int64("api_key_id", apiKey.ID),
+		zap.Any("group_id", apiKey.GroupID),
+	)
+	if h.gatewayService == nil || h.concurrencyHelper == nil || h.concurrencyHelper.concurrencyService == nil {
+		reqLog.Error("openai.codex_models_dependencies_missing")
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable")
+		return
+	}
+
+	selection, _, err := h.gatewayService.SelectCodexModelsManifestAccount(c.Request.Context(), apiKey.GroupID)
 	if err != nil {
 		h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "No available OpenAI accounts")
 		return
 	}
+	streamStarted := false
+	accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, "", selection, false, &streamStarted, reqLog)
+	if !acquired {
+		return
+	}
+	if accountReleaseFunc != nil {
+		defer accountReleaseFunc()
+	}
+	account := selection.Account
 
 	manifest, err := h.gatewayService.FetchCodexModelsManifest(c.Request.Context(), account, c.Query("client_version"), c.GetHeader("If-None-Match"))
 	if err != nil {

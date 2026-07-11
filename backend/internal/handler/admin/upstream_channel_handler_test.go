@@ -109,6 +109,25 @@ func TestUpstreamChannelHandlerUpdateStatusOnlyPreservesChannelConfig(t *testing
 	require.Len(t, stored.Platforms[0].KeyPools[0].Keys, 1)
 }
 
+func TestUpstreamChannelHandlerListPassesProviderFilter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := newAdminUpstreamFakeRepo()
+	svc := service.NewUpstreamChannelService(repo, nil, nil, nil, adminUpstreamFakeEncryptor{}, nil, nil)
+	handler := NewUpstreamChannelHandler(svc)
+
+	router := gin.New()
+	router.GET("/upstreams", handler.List)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/upstreams?provider=OpenAI&status=active&search=prod", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, service.PlatformOpenAI, repo.lastProvider)
+	require.Equal(t, service.StatusActive, repo.lastStatus)
+	require.Equal(t, "prod", repo.lastSearch)
+}
+
 func TestUpstreamChannelHandlerTestAcceptsFilteredBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := newAdminUpstreamFakeRepo()
@@ -194,6 +213,9 @@ type adminUpstreamFakeRepo struct {
 	nextID       int64
 	channels     map[int64]*service.UpstreamChannel
 	testedKeyIDs []int64
+	lastStatus   string
+	lastSearch   string
+	lastProvider string
 }
 
 func newAdminUpstreamFakeRepo() *adminUpstreamFakeRepo {
@@ -231,8 +253,11 @@ func (r *adminUpstreamFakeRepo) GetByID(_ context.Context, id int64) (*service.U
 	return &cp, nil
 }
 
-func (r *adminUpstreamFakeRepo) List(_ context.Context, _ pagination.PaginationParams, _, _ string) ([]service.UpstreamChannel, *pagination.PaginationResult, error) {
-	return nil, &pagination.PaginationResult{}, nil
+func (r *adminUpstreamFakeRepo) List(_ context.Context, _ pagination.PaginationParams, status, search, provider string) ([]service.UpstreamChannel, *pagination.PaginationResult, error) {
+	r.lastStatus = status
+	r.lastSearch = search
+	r.lastProvider = provider
+	return []service.UpstreamChannel{}, &pagination.PaginationResult{Total: 0, Page: 1, PageSize: 20, Pages: 1}, nil
 }
 
 func (r *adminUpstreamFakeRepo) UpdatePoolSyncedGroupID(context.Context, int64, int64) error {

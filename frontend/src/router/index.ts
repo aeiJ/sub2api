@@ -492,7 +492,7 @@ const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       requiresAdmin: true,
-      title: 'Upstream Management',
+      title: 'Upstream Accounts',
       titleKey: 'admin.upstreamChannels.title',
       descriptionKey: 'admin.upstreamChannels.description'
     }

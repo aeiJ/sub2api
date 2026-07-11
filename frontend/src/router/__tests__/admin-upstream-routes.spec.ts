@@ -9,6 +9,12 @@ const routerSource = readFileSync(routerPath, 'utf8')
 
 describe('admin upstream routes', () => {
   it('keeps custom upstream monitor separate from native channel monitor', () => {
+    expect(routerSource).toContain("path: '/admin/upstreams'")
+    expect(routerSource).toContain("name: 'AdminUpstreamChannels'")
+    expect(routerSource).toContain("component: () => import('@/views/admin/UpstreamChannelsView.vue')")
+    expect(routerSource).toContain("title: 'Upstream Accounts'")
+    expect(routerSource).toContain("titleKey: 'admin.upstreamChannels.title'")
+
     expect(routerSource).toContain("path: '/admin/upstreams/monitor'")
     expect(routerSource).toContain("name: 'AdminUpstreamAccountMonitor'")
     expect(routerSource).toContain("component: () => import('@/views/admin/UpstreamAccountMonitorView.vue')")

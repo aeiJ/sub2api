@@ -35,7 +35,7 @@ type UpstreamChannelRepository interface {
 	Update(ctx context.Context, channel *UpstreamChannel) error
 	Delete(ctx context.Context, id int64) error
 	GetByID(ctx context.Context, id int64) (*UpstreamChannel, error)
-	List(ctx context.Context, params pagination.PaginationParams, status, search string) ([]UpstreamChannel, *pagination.PaginationResult, error)
+	List(ctx context.Context, params pagination.PaginationParams, status, search, provider string) ([]UpstreamChannel, *pagination.PaginationResult, error)
 	UpdatePoolSyncedGroupID(ctx context.Context, poolID int64, groupID int64) error
 	UpdateKeySyncedAccountID(ctx context.Context, keyID int64, accountID int64) error
 	UpdateKeyTestResult(ctx context.Context, keyID int64, result UpstreamTestResult) error
@@ -209,8 +209,8 @@ func NewUpstreamChannelService(
 	}
 }
 
-func (s *UpstreamChannelService) List(ctx context.Context, params pagination.PaginationParams, status, search string) ([]UpstreamChannel, *pagination.PaginationResult, error) {
-	channels, result, err := s.repo.List(ctx, params, normalizeOptionalStatus(status), strings.TrimSpace(search))
+func (s *UpstreamChannelService) List(ctx context.Context, params pagination.PaginationParams, status, search, provider string) ([]UpstreamChannel, *pagination.PaginationResult, error) {
+	channels, result, err := s.repo.List(ctx, params, normalizeOptionalStatus(status), strings.TrimSpace(search), normalizeProvider(provider))
 	if err != nil {
 		return nil, nil, err
 	}

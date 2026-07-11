@@ -1,7 +1,9 @@
 package admin
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -74,6 +76,37 @@ func (h *UpstreamAccountMonitorHandler) RunAll(c *gin.Context) {
 	response.Success(c, result)
 }
 
+func (h *UpstreamAccountMonitorHandler) StreamRunAll(c *gin.Context) {
+	params, err := parseUpstreamAccountMonitorBatchParams(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	events, err := h.service.StreamRunAll(c.Request.Context(), params)
+	if err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		response.InternalError(c, "streaming unsupported")
+		return
+	}
+	header := c.Writer.Header()
+	header.Set("Content-Type", "text/event-stream")
+	header.Set("Cache-Control", "no-cache")
+	header.Set("Connection", "keep-alive")
+	header.Set("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+	for event := range events {
+		if err := writeUpstreamAccountMonitorSSE(c, event); err != nil {
+			return
+		}
+		flusher.Flush()
+	}
+}
+
 func (h *UpstreamAccountMonitorHandler) RunOne(c *gin.Context) {
 	accountID, err := strconv.ParseInt(c.Param("accountId"), 10, 64)
 	if err != nil {
@@ -98,6 +131,9 @@ func parseUpstreamAccountMonitorListParams(c *gin.Context) (service.UpstreamAcco
 	return service.UpstreamAccountMonitorListParams{
 		Page:                              page,
 		PageSize:                          pageSize,
+		SortBy:                            strings.TrimSpace(c.Query("sort_by")),
+		SortOrder:                         strings.TrimSpace(c.Query("sort_order")),
+		AvailabilityWindow:                strings.TrimSpace(c.Query("availability_window")),
 		UpstreamAccountMonitorBatchParams: batch,
 	}, nil
 }
@@ -107,12 +143,26 @@ func parseUpstreamAccountMonitorBatchParams(c *gin.Context) (service.UpstreamAcc
 	if err != nil {
 		return service.UpstreamAccountMonitorBatchParams{}, err
 	}
+	monitorStatus := strings.TrimSpace(c.Query("monitor_status"))
+	if !isValidUpstreamAccountMonitorStatusFilter(monitorStatus) {
+		return service.UpstreamAccountMonitorBatchParams{}, fmt.Errorf("invalid monitor_status")
+	}
 	return service.UpstreamAccountMonitorBatchParams{
-		Platform: c.Query("platform"),
-		Status:   c.Query("status"),
-		Search:   strings.TrimSpace(c.Query("search")),
-		GroupID:  groupID,
+		Platform:      c.Query("platform"),
+		Status:        c.Query("status"),
+		MonitorStatus: monitorStatus,
+		Search:        strings.TrimSpace(c.Query("search")),
+		GroupID:       groupID,
 	}, nil
+}
+
+func isValidUpstreamAccountMonitorStatusFilter(status string) bool {
+	switch status {
+	case "", service.MonitorStatusOperational, service.MonitorStatusDegraded, service.MonitorStatusFailed:
+		return true
+	default:
+		return false
+	}
 }
 
 func parseUpstreamAccountMonitorGroupID(raw string) (int64, error) {
@@ -128,6 +178,39 @@ func parseUpstreamAccountMonitorGroupID(raw string) (int64, error) {
 		return 0, fmt.Errorf("invalid group_id")
 	}
 	return groupID, nil
+}
+
+func (h *UpstreamAccountMonitorHandler) BatchUpdateSettings(c *gin.Context) {
+	params, err := parseUpstreamAccountMonitorBatchParams(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	var req service.UpstreamAccountMonitorBatchSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	result, err := h.service.BatchUpdateSettings(c.Request.Context(), params, req)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, result)
+}
+
+func writeUpstreamAccountMonitorSSE(c *gin.Context, event service.UpstreamAccountMonitorRunAllStreamEvent) error {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(c.Writer, "event: %s\n", event.Type); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", payload); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (h *UpstreamAccountMonitorHandler) UpdateSettings(c *gin.Context) {

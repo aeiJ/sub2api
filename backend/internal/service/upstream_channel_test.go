@@ -170,6 +170,18 @@ func TestUpstreamChannelServiceCreateRejectsDuplicatePlatformsAndPools(t *testin
 	require.Equal(t, "UPSTREAM_KEY_POOL_DUPLICATE", infraerrors.Reason(err))
 }
 
+func TestUpstreamChannelServiceListNormalizesProviderFilter(t *testing.T) {
+	repo := newFakeUpstreamRepo()
+	svc := NewUpstreamChannelService(repo, nil, nil, nil, fakeUpstreamEncryptor{}, nil, nil)
+
+	_, _, err := svc.List(context.Background(), pagination.PaginationParams{Page: 1, PageSize: 20}, "active", " prod ", " OpenAI ")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusActive, repo.lastStatus)
+	require.Equal(t, "prod", repo.lastSearch)
+	require.Equal(t, PlatformOpenAI, repo.lastProvider)
+}
+
 func TestUpstreamChannelServiceSyncIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeUpstreamRepo()
@@ -532,6 +544,9 @@ type fakeUpstreamRepo struct {
 	nextKeyID      int64
 	channels       map[int64]*UpstreamChannel
 	testedKeyIDs   []int64
+	lastStatus     string
+	lastSearch     string
+	lastProvider   string
 }
 
 func newFakeUpstreamRepo() *fakeUpstreamRepo {
@@ -575,7 +590,10 @@ func (r *fakeUpstreamRepo) GetByID(_ context.Context, id int64) (*UpstreamChanne
 	return &cp, nil
 }
 
-func (r *fakeUpstreamRepo) List(_ context.Context, _ pagination.PaginationParams, _, _ string) ([]UpstreamChannel, *pagination.PaginationResult, error) {
+func (r *fakeUpstreamRepo) List(_ context.Context, _ pagination.PaginationParams, status, search, provider string) ([]UpstreamChannel, *pagination.PaginationResult, error) {
+	r.lastStatus = status
+	r.lastSearch = search
+	r.lastProvider = provider
 	out := make([]UpstreamChannel, 0, len(r.channels))
 	for _, channel := range r.channels {
 		out = append(out, cloneUpstreamChannel(channel))

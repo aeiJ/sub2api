@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,6 +17,63 @@ func newCodexModelsTestAccount() *Account {
 			"access_token":       "test-access-token",
 			"chatgpt_account_id": "acc-123",
 		},
+	}
+}
+
+func newCodexModelsSchedulableAccount(id int64, accountType string, priority int) Account {
+	account := Account{
+		ID:          id,
+		Name:        "codex-test-account",
+		Platform:    PlatformOpenAI,
+		Type:        accountType,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    priority,
+		Credentials: map[string]any{},
+	}
+	if accountType == AccountTypeOAuth {
+		account.Credentials["access_token"] = "test-access-token"
+	} else {
+		account.Credentials["api_key"] = "sk-test"
+	}
+	return account
+}
+
+func TestSelectCodexModelsManifestAccountSkipsAPIKey(t *testing.T) {
+	svc := &OpenAIGatewayService{
+		accountRepo: stubOpenAIAccountRepo{accounts: []Account{
+			newCodexModelsSchedulableAccount(1, AccountTypeAPIKey, 0),
+			newCodexModelsSchedulableAccount(2, AccountTypeOAuth, 10),
+		}},
+	}
+
+	selection, _, err := svc.SelectCodexModelsManifestAccount(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("SelectCodexModelsManifestAccount returned error: %v", err)
+	}
+	if selection == nil || selection.Account == nil {
+		t.Fatal("expected selected account, got nil")
+	}
+	if selection.Account.ID != 2 || selection.Account.Type != AccountTypeOAuth {
+		t.Fatalf("selected account = (%d, %s), want OAuth account 2", selection.Account.ID, selection.Account.Type)
+	}
+}
+
+func TestSelectCodexModelsManifestAccountRequiresOAuth(t *testing.T) {
+	svc := &OpenAIGatewayService{
+		accountRepo: stubOpenAIAccountRepo{accounts: []Account{
+			newCodexModelsSchedulableAccount(1, AccountTypeAPIKey, 0),
+			newCodexModelsSchedulableAccount(2, AccountTypeAPIKey, 1),
+		}},
+	}
+
+	selection, _, err := svc.SelectCodexModelsManifestAccount(context.Background(), nil)
+	if !errors.Is(err, ErrNoAvailableAccounts) {
+		t.Fatalf("err = %v, want ErrNoAvailableAccounts", err)
+	}
+	if selection != nil {
+		t.Fatalf("selection = %#v, want nil", selection)
 	}
 }
 
