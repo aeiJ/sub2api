@@ -43,6 +43,55 @@ func ParseSchedulerBucket(raw string) (SchedulerBucket, bool) {
 	}, true
 }
 
+type SchedulerDrainTargetBucket struct {
+	GroupID     int64
+	Platform    string
+	Mode        string
+	AccountType string
+}
+
+func NewSchedulerDrainTargetBucket(bucket SchedulerBucket, accountType string) SchedulerDrainTargetBucket {
+	return SchedulerDrainTargetBucket{
+		GroupID:     bucket.GroupID,
+		Platform:    bucket.Platform,
+		Mode:        bucket.Mode,
+		AccountType: accountType,
+	}.Normalized()
+}
+
+func (b SchedulerDrainTargetBucket) Normalized() SchedulerDrainTargetBucket {
+	b.Platform = strings.ToLower(strings.TrimSpace(b.Platform))
+	b.Mode = strings.ToLower(strings.TrimSpace(b.Mode))
+	b.AccountType = strings.ToLower(strings.TrimSpace(b.AccountType))
+	return b
+}
+
+func (b SchedulerDrainTargetBucket) String() string {
+	b = b.Normalized()
+	return fmt.Sprintf("%d:%s:%s:%s", b.GroupID, b.Platform, b.Mode, b.AccountType)
+}
+
+func ParseSchedulerDrainTargetBucket(raw string) (SchedulerDrainTargetBucket, bool) {
+	parts := strings.Split(raw, ":")
+	if len(parts) != 4 {
+		return SchedulerDrainTargetBucket{}, false
+	}
+	groupID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return SchedulerDrainTargetBucket{}, false
+	}
+	bucket := SchedulerDrainTargetBucket{
+		GroupID:     groupID,
+		Platform:    parts[1],
+		Mode:        parts[2],
+		AccountType: parts[3],
+	}.Normalized()
+	if bucket.Platform == "" || bucket.Mode == "" || bucket.AccountType == "" {
+		return SchedulerDrainTargetBucket{}, false
+	}
+	return bucket, true
+}
+
 // SchedulerCache 负责调度快照与账号快照的缓存读写。
 type SchedulerCache interface {
 	// GetSnapshot 读取快照并返回命中与否（ready + active + 数据完整）。
@@ -63,6 +112,14 @@ type SchedulerCache interface {
 	UnlockBucket(ctx context.Context, bucket SchedulerBucket) error
 	// ListBuckets 返回已注册的分桶集合。
 	ListBuckets(ctx context.Context) ([]SchedulerBucket, error)
+	// GetDrainTarget reads the current OpenAI drain target for a bucket/account-type pool.
+	GetDrainTarget(ctx context.Context, bucket SchedulerDrainTargetBucket) (int64, bool, error)
+	// TryClaimDrainTarget sets the target only when absent or already set to the same account.
+	TryClaimDrainTarget(ctx context.Context, bucket SchedulerDrainTargetBucket, accountID int64) (bool, error)
+	// AdvanceDrainTarget replaces the target only when the current value matches expectedAccountID.
+	AdvanceDrainTarget(ctx context.Context, bucket SchedulerDrainTargetBucket, expectedAccountID, nextAccountID int64) (bool, error)
+	// ClearDrainTarget deletes the target only when the current value matches expectedAccountID.
+	ClearDrainTarget(ctx context.Context, bucket SchedulerDrainTargetBucket, expectedAccountID int64) (bool, error)
 	// GetOutboxWatermark 读取 outbox 水位。
 	GetOutboxWatermark(ctx context.Context) (int64, error)
 	// SetOutboxWatermark 保存 outbox 水位。

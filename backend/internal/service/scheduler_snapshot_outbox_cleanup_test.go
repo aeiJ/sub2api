@@ -50,6 +50,22 @@ func (c *outboxCleanupCache) ListBuckets(ctx context.Context) ([]SchedulerBucket
 	return nil, nil
 }
 
+func (c *outboxCleanupCache) GetDrainTarget(ctx context.Context, bucket SchedulerDrainTargetBucket) (int64, bool, error) {
+	return 0, false, nil
+}
+
+func (c *outboxCleanupCache) TryClaimDrainTarget(ctx context.Context, bucket SchedulerDrainTargetBucket, accountID int64) (bool, error) {
+	return false, nil
+}
+
+func (c *outboxCleanupCache) AdvanceDrainTarget(ctx context.Context, bucket SchedulerDrainTargetBucket, expectedAccountID, nextAccountID int64) (bool, error) {
+	return false, nil
+}
+
+func (c *outboxCleanupCache) ClearDrainTarget(ctx context.Context, bucket SchedulerDrainTargetBucket, expectedAccountID int64) (bool, error) {
+	return false, nil
+}
+
 func (c *outboxCleanupCache) GetOutboxWatermark(ctx context.Context) (int64, error) {
 	return c.watermark, nil
 }

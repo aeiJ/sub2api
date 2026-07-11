@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -14,8 +15,11 @@ import (
 
 type openAISnapshotCacheStub struct {
 	SchedulerCache
-	snapshotAccounts []*Account
-	accountsByID     map[int64]*Account
+	snapshotAccounts   []*Account
+	accountsByID       map[int64]*Account
+	drainTargets       map[string]int64
+	claimFailures      map[int64]bool
+	advanceRaceTargets map[int64]int64
 }
 
 type schedulerTestOpenAIAccountRepo struct {
@@ -263,6 +267,58 @@ func (s *openAISnapshotCacheStub) GetAccount(ctx context.Context, accountID int6
 	}
 	cloned := *account
 	return &cloned, nil
+}
+
+func (s *openAISnapshotCacheStub) GetDrainTarget(ctx context.Context, bucket SchedulerDrainTargetBucket) (int64, bool, error) {
+	if s == nil || s.drainTargets == nil {
+		return 0, false, nil
+	}
+	id, ok := s.drainTargets[bucket.String()]
+	return id, ok, nil
+}
+
+func (s *openAISnapshotCacheStub) TryClaimDrainTarget(ctx context.Context, bucket SchedulerDrainTargetBucket, accountID int64) (bool, error) {
+	if s.claimFailures != nil && s.claimFailures[accountID] {
+		return false, nil
+	}
+	if s.drainTargets == nil {
+		s.drainTargets = make(map[string]int64)
+	}
+	key := bucket.String()
+	current, ok := s.drainTargets[key]
+	if ok && current != accountID {
+		return false, nil
+	}
+	s.drainTargets[key] = accountID
+	return true, nil
+}
+
+func (s *openAISnapshotCacheStub) AdvanceDrainTarget(ctx context.Context, bucket SchedulerDrainTargetBucket, expectedAccountID, nextAccountID int64) (bool, error) {
+	if s == nil || s.drainTargets == nil {
+		return false, nil
+	}
+	key := bucket.String()
+	if raceTargetID, ok := s.advanceRaceTargets[nextAccountID]; ok {
+		s.drainTargets[key] = raceTargetID
+		return false, nil
+	}
+	if s.drainTargets[key] != expectedAccountID {
+		return false, nil
+	}
+	s.drainTargets[key] = nextAccountID
+	return true, nil
+}
+
+func (s *openAISnapshotCacheStub) ClearDrainTarget(ctx context.Context, bucket SchedulerDrainTargetBucket, expectedAccountID int64) (bool, error) {
+	if s == nil || s.drainTargets == nil {
+		return false, nil
+	}
+	key := bucket.String()
+	if s.drainTargets[key] != expectedAccountID {
+		return false, nil
+	}
+	delete(s.drainTargets, key)
+	return true, nil
 }
 
 func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabledUsesLegacyLoadAwareness(t *testing.T) {
@@ -1771,6 +1827,61 @@ func TestDefaultOpenAIAccountScheduler_ShouldEscapeStickyAccount_ThresholdBounda
 	require.InDelta(t, 15000, observedTTFT, 1e-9)
 }
 
+func TestOpenAIAccountRuntimeStats_APIKeyTTFTDemotionThresholds(t *testing.T) {
+	stats := newOpenAIAccountRuntimeStats()
+	account := &Account{ID: 22001, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	snapshot := stats.apiKeyTTFTDemotionSnapshot(account)
+	require.False(t, snapshot.hasTTFT)
+	require.False(t, snapshot.demoted)
+	require.Equal(t, openAIAPIKeyTTFTNormal, snapshot.state)
+
+	stat := stats.loadOrCreate(account.ID)
+	stat.ttftEWMABits.Store(math.Float64bits(12000))
+	snapshot = stats.apiKeyTTFTDemotionSnapshot(account)
+	require.True(t, snapshot.hasTTFT)
+	require.False(t, snapshot.demoted)
+	require.Equal(t, openAIAPIKeyTTFTNormal, snapshot.state)
+
+	stat.ttftEWMABits.Store(math.Float64bits(openAIAPIKeyTTFTDemoteThresholdMs))
+	snapshot = stats.apiKeyTTFTDemotionSnapshot(account)
+	require.False(t, snapshot.demoted, "demotion threshold is strict")
+	require.Equal(t, openAIAPIKeyTTFTNormal, snapshot.state)
+
+	stat.ttftEWMABits.Store(math.Float64bits(openAIAPIKeyTTFTDemoteThresholdMs + 0.1))
+	snapshot = stats.apiKeyTTFTDemotionSnapshot(account)
+	require.True(t, snapshot.demoted)
+	require.Equal(t, openAIAPIKeyTTFTDemoted, snapshot.state)
+
+	stat.ttftEWMABits.Store(math.Float64bits(openAIAPIKeyTTFTRecoverThresholdMs))
+	snapshot = stats.apiKeyTTFTDemotionSnapshot(account)
+	require.True(t, snapshot.demoted, "recovery threshold is strict")
+	require.Equal(t, openAIAPIKeyTTFTDemoted, snapshot.state)
+
+	stat.ttftEWMABits.Store(math.Float64bits(openAIAPIKeyTTFTRecoverThresholdMs - 0.1))
+	snapshot = stats.apiKeyTTFTDemotionSnapshot(account)
+	require.False(t, snapshot.demoted)
+	require.Equal(t, openAIAPIKeyTTFTNormal, snapshot.state)
+}
+
+func TestOpenAIAccountRuntimeStats_APIKeyTTFTDemotionIgnoresNonAPIKey(t *testing.T) {
+	stats := newOpenAIAccountRuntimeStats()
+	accountID := int64(22002)
+	stat := stats.loadOrCreate(accountID)
+	stat.ttftEWMABits.Store(math.Float64bits(openAIAPIKeyTTFTDemoteThresholdMs + 5000))
+	stat.apiKeyTTFTDemotion.Store(int32(openAIAPIKeyTTFTDemoted))
+
+	oauthAccount := &Account{ID: accountID, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	snapshot := stats.apiKeyTTFTDemotionSnapshot(oauthAccount)
+	require.False(t, snapshot.demoted)
+	require.Equal(t, openAIAPIKeyTTFTNormal, snapshot.state)
+
+	nonOpenAIAPIKey := &Account{ID: accountID, Platform: PlatformAnthropic, Type: AccountTypeAPIKey}
+	snapshot = stats.apiKeyTTFTDemotionSnapshot(nonOpenAIAPIKey)
+	require.False(t, snapshot.demoted)
+	require.Equal(t, openAIAPIKeyTTFTNormal, snapshot.state)
+}
+
 func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionSticky_ForceHTTP(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(1010)
@@ -2169,6 +2280,541 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_AllDegradedChoosesLeast
 	require.NotNil(t, selection.Account)
 	require.Equal(t, int64(38102), selection.Account.ID)
 	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DrainPrefersOAuthBeforeAPIKey(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(114)
+	accounts := []Account{
+		{ID: 38201, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}},
+		{ID: 38202, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 9, GroupIDs: []int64{groupID}},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+
+	selection, decision, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(38202), selection.Account.ID)
+	require.Equal(t, AccountTypeOAuth, selection.Account.Type)
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DrainSpillsToAPIKeyWhenOAuthFull(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(115)
+	accounts := []Account{
+		{ID: 38301, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}},
+		{ID: 38302, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 9, GroupIDs: []int64{groupID}},
+	}
+	concurrencyCache := schedulerTestConcurrencyCache{
+		loadMap: map[int64]*AccountLoadInfo{
+			38301: {AccountID: 38301, CurrentConcurrency: 1, LoadRate: 100, WaitingCount: 1},
+			38302: {AccountID: 38302, CurrentConcurrency: 0, LoadRate: 0, WaitingCount: 0},
+		},
+		acquireResults: map[int64]bool{
+			38301: false,
+			38302: true,
+		},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(38302), selection.Account.ID)
+	require.Equal(t, AccountTypeAPIKey, selection.Account.Type)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DrainKeepsPersistedTargetAndTemporaryFallback(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(116)
+	accounts := []Account{
+		{ID: 38401, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 9, GroupIDs: []int64{groupID}},
+		{ID: 38402, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}},
+	}
+	bucket := NewSchedulerDrainTargetBucket(SchedulerBucket{GroupID: groupID, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}, AccountTypeAPIKey)
+	snapshotCache := &openAISnapshotCacheStub{
+		snapshotAccounts: []*Account{&accounts[0], &accounts[1]},
+		accountsByID:     map[int64]*Account{38401: &accounts[0], 38402: &accounts[1]},
+		drainTargets:     map[string]int64{bucket.String(): 38401},
+	}
+	concurrencyCache := &schedulerTestConcurrencyCache{
+		loadMap: map[int64]*AccountLoadInfo{
+			38401: {AccountID: 38401, CurrentConcurrency: 0, LoadRate: 0, WaitingCount: 0},
+			38402: {AccountID: 38402, CurrentConcurrency: 0, LoadRate: 0, WaitingCount: 0},
+		},
+	}
+	concurrencyService := NewConcurrencyService(concurrencyCache)
+	concurrencyService.SetAccountLoadBatchCacheTTL(0)
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		schedulerSnapshot:  &SchedulerSnapshotService{cache: snapshotCache},
+		concurrencyService: concurrencyService,
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, int64(38401), selection.Account.ID)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+
+	concurrencyCache.loadMap[38401] = &AccountLoadInfo{AccountID: 38401, CurrentConcurrency: 1, LoadRate: 100, WaitingCount: 1}
+	concurrencyCache.acquireResults = map[int64]bool{38401: false, 38402: true}
+	selection, _, err = svc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, int64(38402), selection.Account.ID)
+	require.Equal(t, int64(38401), snapshotCache.drainTargets[bucket.String()], "concurrency-full fallback must not retire the target")
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DrainRetiresHardUnschedulableTarget(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(117)
+	resetAt := time.Now().Add(5 * time.Hour)
+	accounts := []Account{
+		{ID: 38501, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &resetAt},
+		{ID: 38502, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 9, GroupIDs: []int64{groupID}},
+	}
+	bucket := NewSchedulerDrainTargetBucket(SchedulerBucket{GroupID: groupID, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}, AccountTypeAPIKey)
+	snapshotCache := &openAISnapshotCacheStub{
+		snapshotAccounts: []*Account{&accounts[0], &accounts[1]},
+		accountsByID:     map[int64]*Account{38501: &accounts[0], 38502: &accounts[1]},
+		drainTargets:     map[string]int64{bucket.String(): 38501},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		schedulerSnapshot:  &SchedulerSnapshotService{cache: snapshotCache},
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, int64(38502), selection.Account.ID)
+	require.Equal(t, int64(38502), snapshotCache.drainTargets[bucket.String()])
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DrainWaitPlanCommitAdvancesTarget(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(120)
+	resetAt := time.Now().Add(5 * time.Hour)
+	accounts := []Account{
+		{ID: 38801, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &resetAt},
+		{ID: 38802, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 9, GroupIDs: []int64{groupID}},
+	}
+	bucket := NewSchedulerDrainTargetBucket(SchedulerBucket{GroupID: groupID, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}, AccountTypeAPIKey)
+	snapshotCache := &openAISnapshotCacheStub{
+		snapshotAccounts: []*Account{&accounts[0], &accounts[1]},
+		accountsByID:     map[int64]*Account{38801: &accounts[0], 38802: &accounts[1]},
+		drainTargets:     map[string]int64{bucket.String(): 38801},
+	}
+	concurrencyCache := schedulerTestConcurrencyCache{
+		loadMap: map[int64]*AccountLoadInfo{
+			38802: {AccountID: 38802, CurrentConcurrency: 1, LoadRate: 100, WaitingCount: 1},
+		},
+		acquireResults: map[int64]bool{38802: false},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		schedulerSnapshot:  &SchedulerSnapshotService{cache: snapshotCache},
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.WaitPlan)
+	require.Equal(t, int64(38802), selection.WaitPlan.AccountID)
+	require.NotNil(t, selection.WaitPlan.CommitAfterAcquire)
+	require.Equal(t, int64(38801), snapshotCache.drainTargets[bucket.String()])
+
+	require.True(t, selection.WaitPlan.CommitAfterAcquire(ctx))
+	require.Equal(t, int64(38802), snapshotCache.drainTargets[bucket.String()])
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DrainCASConflictDoesNotReturnLosingAccount(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(121)
+	resetAt := time.Now().Add(5 * time.Hour)
+	accounts := []Account{
+		{ID: 38901, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &resetAt},
+		{ID: 38902, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}},
+		{ID: 38903, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 1, GroupIDs: []int64{groupID}},
+	}
+	bucket := NewSchedulerDrainTargetBucket(SchedulerBucket{GroupID: groupID, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}, AccountTypeAPIKey)
+	snapshotCache := &openAISnapshotCacheStub{
+		snapshotAccounts:   []*Account{&accounts[0], &accounts[1], &accounts[2]},
+		accountsByID:       map[int64]*Account{38901: &accounts[0], 38902: &accounts[1], 38903: &accounts[2]},
+		drainTargets:       map[string]int64{bucket.String(): 38901},
+		advanceRaceTargets: map[int64]int64{38902: 38903},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		schedulerSnapshot:  &SchedulerSnapshotService{cache: snapshotCache},
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(38903), selection.Account.ID)
+	require.Equal(t, int64(38903), snapshotCache.drainTargets[bucket.String()])
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestDefaultOpenAIAccountScheduler_LocalDrainCASConflictKeepsCurrentTarget(t *testing.T) {
+	ctx := context.Background()
+	bucket := NewSchedulerDrainTargetBucket(SchedulerBucket{GroupID: 1211, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}, AccountTypeAPIKey)
+	scheduler := &defaultOpenAIAccountScheduler{}
+	scheduler.localDrainTargets.Store(bucket.String(), int64(38913))
+	drain := openAIAccountDrainContext{
+		enabled: true,
+		bucket:  SchedulerBucket{GroupID: 1211, Platform: PlatformOpenAI, Mode: SchedulerModeSingle},
+	}
+
+	ok := scheduler.setOpenAIAccountDrainTarget(ctx, bucket, 38911, 38912, drain)
+	require.False(t, ok)
+	targetID, hasTarget := scheduler.getOpenAIAccountDrainTarget(ctx, drain, bucket)
+	require.True(t, hasTarget)
+	require.Equal(t, int64(38913), targetID)
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DrainRetiresQuotaAutoPausedTarget(t *testing.T) {
+	ctx := withOpenAIQuotaAutoPauseSettings(context.Background(), OpsOpenAIAccountQuotaAutoPauseSettings{DefaultThreshold5h: 0.95})
+	groupID := int64(122)
+	accounts := []Account{
+		{
+			ID:          39001,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    0,
+			GroupIDs:    []int64{groupID},
+			Extra: map[string]any{
+				"codex_5h_used_percent": 95.0,
+			},
+		},
+		{ID: 39002, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 9, GroupIDs: []int64{groupID}},
+	}
+	bucket := NewSchedulerDrainTargetBucket(SchedulerBucket{GroupID: groupID, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}, AccountTypeAPIKey)
+	snapshotCache := &openAISnapshotCacheStub{
+		snapshotAccounts: []*Account{&accounts[0], &accounts[1]},
+		accountsByID:     map[int64]*Account{39001: &accounts[0], 39002: &accounts[1]},
+		drainTargets:     map[string]int64{bucket.String(): 39001},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		schedulerSnapshot:  &SchedulerSnapshotService{cache: snapshotCache},
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, int64(39002), selection.Account.ID)
+	require.Equal(t, int64(39002), snapshotCache.drainTargets[bucket.String()])
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DrainRequestLocalModelBypassDoesNotRetireTarget(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(118)
+	accounts := []Account{
+		{
+			ID:          38601,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    0,
+			GroupIDs:    []int64{groupID},
+			Credentials: map[string]any{"model_mapping": map[string]any{"other-model": "other-model"}},
+		},
+		{ID: 38602, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 9, GroupIDs: []int64{groupID}},
+	}
+	bucket := NewSchedulerDrainTargetBucket(SchedulerBucket{GroupID: groupID, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}, AccountTypeAPIKey)
+	snapshotCache := &openAISnapshotCacheStub{
+		snapshotAccounts: []*Account{&accounts[0], &accounts[1]},
+		accountsByID:     map[int64]*Account{38601: &accounts[0], 38602: &accounts[1]},
+		drainTargets:     map[string]int64{bucket.String(): 38601},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		schedulerSnapshot:  &SchedulerSnapshotService{cache: snapshotCache},
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, int64(38602), selection.Account.ID)
+	require.Equal(t, int64(38601), snapshotCache.drainTargets[bucket.String()])
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DrainAPIKeyTTFTDemotionAndFallback(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(119)
+	accounts := []Account{
+		{ID: 38701, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}},
+		{ID: 38702, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 9, GroupIDs: []int64{groupID}},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		openaiAccountStats: newOpenAIAccountRuntimeStats(),
+	}
+	slow := 20000
+	fast := 1000
+	svc.openaiAccountStats.report(38701, true, &slow)
+	svc.openaiAccountStats.report(38702, true, &fast)
+
+	selection, _, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, int64(38702), selection.Account.ID)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+
+	onlySlow := []Account{{ID: 38703, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}}
+	fallbackSvc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: onlySlow},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		openaiAccountStats: newOpenAIAccountRuntimeStats(),
+	}
+	fallbackSvc.openaiAccountStats.report(38703, true, &slow)
+	selection, _, err = fallbackSvc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, int64(38703), selection.Account.ID)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DrainDemotedAPIKeyTargetAdvancesToNormal(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(123)
+	accounts := []Account{
+		{ID: 39101, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}},
+		{ID: 39102, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 9, GroupIDs: []int64{groupID}},
+	}
+	bucket := NewSchedulerDrainTargetBucket(SchedulerBucket{GroupID: groupID, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}, AccountTypeAPIKey)
+	snapshotCache := &openAISnapshotCacheStub{
+		snapshotAccounts: []*Account{&accounts[0], &accounts[1]},
+		accountsByID:     map[int64]*Account{39101: &accounts[0], 39102: &accounts[1]},
+		drainTargets:     map[string]int64{bucket.String(): 39101},
+	}
+	stats := newOpenAIAccountRuntimeStats()
+	slow := 20000
+	stats.report(39101, true, &slow)
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		schedulerSnapshot:  &SchedulerSnapshotService{cache: snapshotCache},
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		openaiAccountStats: stats,
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, int64(39102), selection.Account.ID)
+	require.Equal(t, int64(39102), snapshotCache.drainTargets[bucket.String()])
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DrainRecoveredAPIKeyDoesNotStealCurrentTarget(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(124)
+	accounts := []Account{
+		{ID: 39201, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}},
+		{ID: 39202, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 9, GroupIDs: []int64{groupID}},
+	}
+	bucket := NewSchedulerDrainTargetBucket(SchedulerBucket{GroupID: groupID, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}, AccountTypeAPIKey)
+	snapshotCache := &openAISnapshotCacheStub{
+		snapshotAccounts: []*Account{&accounts[0], &accounts[1]},
+		accountsByID:     map[int64]*Account{39201: &accounts[0], 39202: &accounts[1]},
+		drainTargets:     map[string]int64{bucket.String(): 39202},
+	}
+	stats := newOpenAIAccountRuntimeStats()
+	stat := stats.loadOrCreate(39201)
+	stat.apiKeyTTFTDemotion.Store(int32(openAIAPIKeyTTFTDemoted))
+	stat.ttftEWMABits.Store(math.Float64bits(openAIAPIKeyTTFTRecoverThresholdMs - 1))
+	require.False(t, stats.apiKeyTTFTDemotionSnapshot(&accounts[0]).demoted)
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		schedulerSnapshot:  &SchedulerSnapshotService{cache: snapshotCache},
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		openaiAccountStats: stats,
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, int64(39202), selection.Account.ID)
+	require.Equal(t, int64(39202), snapshotCache.drainTargets[bucket.String()])
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DrainDemotedAPIKeyProbeDoesNotMutateTarget(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(126)
+	accounts := []Account{
+		{ID: 39401, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}},
+		{ID: 39402, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 9, GroupIDs: []int64{groupID}},
+	}
+	bucket := NewSchedulerDrainTargetBucket(SchedulerBucket{GroupID: groupID, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}, AccountTypeAPIKey)
+	snapshotCache := &openAISnapshotCacheStub{
+		snapshotAccounts: []*Account{&accounts[0], &accounts[1]},
+		accountsByID:     map[int64]*Account{39401: &accounts[0], 39402: &accounts[1]},
+		drainTargets:     map[string]int64{bucket.String(): 39402},
+	}
+	stats := newOpenAIAccountRuntimeStats()
+	stat := stats.loadOrCreate(39401)
+	stat.apiKeyTTFTDemotion.Store(int32(openAIAPIKeyTTFTDemoted))
+	stat.ttftEWMABits.Store(math.Float64bits(openAIAPIKeyTTFTDemoteThresholdMs + 1000))
+	oldProbeAt := time.Now().Add(-2 * openAIAPIKeyTTFTDemotionProbeEvery).UnixNano()
+	stat.apiKeyTTFTDemotedAtUnixNano.Store(oldProbeAt)
+	stat.apiKeyTTFTLastProbeAtUnixNano.Store(oldProbeAt)
+	require.True(t, stats.apiKeyTTFTDemotionSnapshot(&accounts[0]).probeDue)
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		schedulerSnapshot:  &SchedulerSnapshotService{cache: snapshotCache},
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		openaiAccountStats: stats,
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, int64(39401), selection.Account.ID)
+	require.Equal(t, int64(39402), snapshotCache.drainTargets[bucket.String()])
+	require.Greater(t, stat.apiKeyTTFTLastProbeAtUnixNano.Load(), oldProbeAt)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DrainStickyAndPreviousResponseDoNotMutateTarget(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(125)
+	accounts := []Account{
+		{ID: 39301, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, Extra: map[string]any{"openai_apikey_responses_websockets_v2_enabled": true}},
+		{ID: 39302, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 9, GroupIDs: []int64{groupID}},
+	}
+	bucket := NewSchedulerDrainTargetBucket(SchedulerBucket{GroupID: groupID, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}, AccountTypeAPIKey)
+	snapshotCache := &openAISnapshotCacheStub{
+		snapshotAccounts: []*Account{&accounts[0], &accounts[1]},
+		accountsByID:     map[int64]*Account{39301: &accounts[0], 39302: &accounts[1]},
+		drainTargets:     map[string]int64{bucket.String(): 39302},
+	}
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:session_hash_drain_no_mutate": 39301}}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              cache,
+		cfg:                newSchedulerTestOpenAIWSV2Config(),
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		schedulerSnapshot:  &SchedulerSnapshotService{cache: snapshotCache},
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+	store := svc.getOpenAIWSStateStore()
+	require.NoError(t, store.BindResponseAccount(ctx, groupID, "resp_drain_no_mutate", 39301, time.Hour))
+
+	selection, decision, err := svc.SelectAccountWithScheduler(ctx, &groupID, "resp_drain_no_mutate", "session_hash_drain_no_mutate", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, int64(39301), selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerPreviousResponse, decision.Layer)
+	require.Equal(t, int64(39302), snapshotCache.drainTargets[bucket.String()])
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+
+	selection, decision, err = svc.SelectAccountWithScheduler(ctx, &groupID, "", "session_hash_drain_no_mutate", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, int64(39301), selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerSessionSticky, decision.Layer)
+	require.Equal(t, int64(39302), snapshotCache.drainTargets[bucket.String()])
 	if selection.ReleaseFunc != nil {
 		selection.ReleaseFunc()
 	}

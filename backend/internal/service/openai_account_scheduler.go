@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -139,11 +140,14 @@ type openAIAccountRuntimeStats struct {
 }
 
 type openAIAccountRuntimeStat struct {
-	errorRateEWMABits atomic.Uint64
-	ttftEWMABits      atomic.Uint64
-	ttftSampleCount   atomic.Int64
-	successStreak     atomic.Int64
-	latencyHealth     atomic.Int32
+	errorRateEWMABits             atomic.Uint64
+	ttftEWMABits                  atomic.Uint64
+	ttftSampleCount               atomic.Int64
+	successStreak                 atomic.Int64
+	latencyHealth                 atomic.Int32
+	apiKeyTTFTDemotion            atomic.Int32
+	apiKeyTTFTDemotedAtUnixNano   atomic.Int64
+	apiKeyTTFTLastProbeAtUnixNano atomic.Int64
 }
 
 type openAIAccountLatencyHealth int32
@@ -152,6 +156,19 @@ const (
 	openAIAccountLatencyHealthy openAIAccountLatencyHealth = iota
 	openAIAccountLatencyDegraded
 	openAIAccountLatencySevere
+)
+
+type openAIAPIKeyTTFTDemotionState int32
+
+const (
+	openAIAPIKeyTTFTNormal openAIAPIKeyTTFTDemotionState = iota
+	openAIAPIKeyTTFTDemoted
+)
+
+const (
+	openAIAPIKeyTTFTDemoteThresholdMs  = 15000.0
+	openAIAPIKeyTTFTRecoverThresholdMs = 8000.0
+	openAIAPIKeyTTFTDemotionProbeEvery = 5 * time.Minute
 )
 
 type openAIAccountLatencyConfig struct {
@@ -170,6 +187,14 @@ type openAIAccountLatencySnapshot struct {
 	ttftSampleCount int64
 	successStreak   int64
 	health          openAIAccountLatencyHealth
+}
+
+type openAIAPIKeyTTFTDemotionSnapshot struct {
+	state    openAIAPIKeyTTFTDemotionState
+	demoted  bool
+	ttft     float64
+	hasTTFT  bool
+	probeDue bool
 }
 
 func newOpenAIAccountRuntimeStats() *openAIAccountRuntimeStats {
@@ -346,6 +371,80 @@ func (s *openAIAccountRuntimeStats) latencySnapshot(accountID int64, cfg openAIA
 	return snapshot
 }
 
+func (s *openAIAccountRuntimeStats) apiKeyTTFTDemotionSnapshot(account *Account) openAIAPIKeyTTFTDemotionSnapshot {
+	snapshot := openAIAPIKeyTTFTDemotionSnapshot{state: openAIAPIKeyTTFTNormal}
+	if s == nil || account == nil || account.ID <= 0 || !account.IsOpenAIApiKey() {
+		return snapshot
+	}
+	value, ok := s.accounts.Load(account.ID)
+	if !ok {
+		return snapshot
+	}
+	stat, _ := value.(*openAIAccountRuntimeStat)
+	if stat == nil {
+		return snapshot
+	}
+
+	ttftValue := math.Float64frombits(stat.ttftEWMABits.Load())
+	if math.IsNaN(ttftValue) {
+		return snapshot
+	}
+	snapshot.ttft = ttftValue
+	snapshot.hasTTFT = true
+
+	current := openAIAPIKeyTTFTDemotionState(stat.apiKeyTTFTDemotion.Load())
+	if current < openAIAPIKeyTTFTNormal || current > openAIAPIKeyTTFTDemoted {
+		current = openAIAPIKeyTTFTNormal
+	}
+	next := current
+	switch {
+	case ttftValue > openAIAPIKeyTTFTDemoteThresholdMs:
+		next = openAIAPIKeyTTFTDemoted
+	case current == openAIAPIKeyTTFTDemoted && ttftValue < openAIAPIKeyTTFTRecoverThresholdMs:
+		next = openAIAPIKeyTTFTNormal
+	case current != openAIAPIKeyTTFTDemoted:
+		next = openAIAPIKeyTTFTNormal
+	}
+	if next != current {
+		stat.apiKeyTTFTDemotion.Store(int32(next))
+	}
+	snapshot.state = next
+	snapshot.demoted = next == openAIAPIKeyTTFTDemoted
+	nowUnix := time.Now().UnixNano()
+	if next == openAIAPIKeyTTFTDemoted {
+		demotedAt := stat.apiKeyTTFTDemotedAtUnixNano.Load()
+		if current != openAIAPIKeyTTFTDemoted || demotedAt <= 0 {
+			demotedAt = nowUnix
+			stat.apiKeyTTFTDemotedAtUnixNano.Store(demotedAt)
+			stat.apiKeyTTFTLastProbeAtUnixNano.Store(0)
+		}
+		lastProbeAt := stat.apiKeyTTFTLastProbeAtUnixNano.Load()
+		probeInterval := int64(openAIAPIKeyTTFTDemotionProbeEvery)
+		snapshot.probeDue = demotedAt > 0 &&
+			nowUnix-demotedAt >= probeInterval &&
+			(lastProbeAt <= 0 || nowUnix-lastProbeAt >= probeInterval)
+	} else {
+		stat.apiKeyTTFTDemotedAtUnixNano.Store(0)
+		stat.apiKeyTTFTLastProbeAtUnixNano.Store(0)
+	}
+	return snapshot
+}
+
+func (s *openAIAccountRuntimeStats) recordAPIKeyTTFTDemotionProbe(accountID int64) {
+	if s == nil || accountID <= 0 {
+		return
+	}
+	value, ok := s.accounts.Load(accountID)
+	if !ok {
+		return
+	}
+	stat, _ := value.(*openAIAccountRuntimeStat)
+	if stat == nil || openAIAPIKeyTTFTDemotionState(stat.apiKeyTTFTDemotion.Load()) != openAIAPIKeyTTFTDemoted {
+		return
+	}
+	stat.apiKeyTTFTLastProbeAtUnixNano.Store(time.Now().UnixNano())
+}
+
 func (s *openAIAccountRuntimeStats) size() int {
 	if s == nil {
 		return 0
@@ -354,9 +453,10 @@ func (s *openAIAccountRuntimeStats) size() int {
 }
 
 type defaultOpenAIAccountScheduler struct {
-	service *OpenAIGatewayService
-	metrics openAIAccountSchedulerMetrics
-	stats   *openAIAccountRuntimeStats
+	service           *OpenAIGatewayService
+	metrics           openAIAccountSchedulerMetrics
+	stats             *openAIAccountRuntimeStats
+	localDrainTargets sync.Map
 }
 
 type openAIStickyEscapeConfig struct {
@@ -598,13 +698,149 @@ func (s *defaultOpenAIAccountScheduler) shouldEscapeStickyAccount(accountID int6
 }
 
 type openAIAccountCandidateScore struct {
-	account       *Account
-	loadInfo      *AccountLoadInfo
-	score         float64
-	errorRate     float64
-	ttft          float64
-	hasTTFT       bool
-	latencyHealth openAIAccountLatencyHealth
+	account            *Account
+	loadInfo           *AccountLoadInfo
+	score              float64
+	errorRate          float64
+	ttft               float64
+	hasTTFT            bool
+	latencyHealth      openAIAccountLatencyHealth
+	apiKeyTTFTDemotion openAIAPIKeyTTFTDemotionState
+	apiKeyTTFTProbeDue bool
+	drainBucket        SchedulerDrainTargetBucket
+	drainCanClaim      bool
+	drainReplaceTarget int64
+	drainClaimBlocked  bool
+}
+
+type openAIAccountDrainContext struct {
+	enabled      bool
+	cache        SchedulerCache
+	bucket       SchedulerBucket
+	hardEligible map[string]map[int64]struct{}
+}
+
+func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountDrainContext(req OpenAIAccountScheduleRequest, hardEligible map[string]map[int64]struct{}) openAIAccountDrainContext {
+	ctx := openAIAccountDrainContext{}
+	if s == nil || s.service == nil || normalizeOpenAICompatiblePlatform(req.Platform) != PlatformOpenAI {
+		return ctx
+	}
+	groupID := int64(0)
+	if req.GroupID != nil && *req.GroupID > 0 {
+		groupID = *req.GroupID
+	}
+	if s.service.cfg != nil && s.service.cfg.RunMode == config.RunModeSimple {
+		groupID = 0
+	}
+	ctx.enabled = true
+	ctx.cache = s.openAIAccountDrainCache()
+	ctx.bucket = SchedulerBucket{GroupID: groupID, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}
+	ctx.hardEligible = hardEligible
+	return ctx
+}
+
+func (s *defaultOpenAIAccountScheduler) openAIAccountDrainCache() SchedulerCache {
+	if s == nil || s.service == nil || s.service.schedulerSnapshot == nil {
+		return nil
+	}
+	return s.service.schedulerSnapshot.cache
+}
+
+func (s *defaultOpenAIAccountScheduler) getOpenAIAccountDrainTarget(ctx context.Context, drain openAIAccountDrainContext, bucket SchedulerDrainTargetBucket) (int64, bool) {
+	if !drain.enabled {
+		return 0, false
+	}
+	if drain.cache != nil {
+		targetID, ok, err := drain.cache.GetDrainTarget(ctx, bucket)
+		if err != nil {
+			slog.Debug("openai_drain_target_read_failed", "bucket", bucket.String(), "err", err)
+			return 0, false
+		}
+		return targetID, ok
+	}
+	if value, ok := s.localDrainTargets.Load(bucket.String()); ok {
+		targetID, _ := value.(int64)
+		if targetID > 0 {
+			return targetID, true
+		}
+	}
+	return 0, false
+}
+
+func (s *defaultOpenAIAccountScheduler) setOpenAIAccountDrainTarget(ctx context.Context, bucket SchedulerDrainTargetBucket, expectedID, accountID int64, drain openAIAccountDrainContext) bool {
+	if !drain.enabled || accountID <= 0 {
+		return true
+	}
+	if drain.cache != nil {
+		if expectedID > 0 {
+			ok, err := drain.cache.AdvanceDrainTarget(ctx, bucket, expectedID, accountID)
+			if err == nil && ok {
+				return true
+			}
+			if err != nil {
+				slog.Debug("openai_drain_target_advance_failed", "bucket", bucket.String(), "expected", expectedID, "account_id", accountID, "err", err)
+				return false
+			}
+			claimed, claimErr := drain.cache.TryClaimDrainTarget(ctx, bucket, accountID)
+			if claimErr != nil {
+				slog.Debug("openai_drain_target_claim_failed", "bucket", bucket.String(), "account_id", accountID, "err", claimErr)
+				return false
+			}
+			return claimed
+		}
+		claimed, err := drain.cache.TryClaimDrainTarget(ctx, bucket, accountID)
+		if err != nil {
+			slog.Debug("openai_drain_target_claim_failed", "bucket", bucket.String(), "account_id", accountID, "err", err)
+			return false
+		}
+		return claimed
+	}
+	key := bucket.String()
+	if expectedID > 0 {
+		if s.localDrainTargets.CompareAndSwap(key, expectedID, accountID) {
+			return true
+		}
+		actual, loaded := s.localDrainTargets.LoadOrStore(key, accountID)
+		if !loaded {
+			return true
+		}
+		current, _ := actual.(int64)
+		return current == accountID
+	}
+	actual, loaded := s.localDrainTargets.LoadOrStore(key, accountID)
+	if !loaded {
+		return true
+	}
+	current, _ := actual.(int64)
+	return current == accountID
+}
+
+func openAIAccountDrainPoolType(account *Account) string {
+	if account != nil && account.Type == AccountTypeAPIKey {
+		return AccountTypeAPIKey
+	}
+	return AccountTypeOAuth
+}
+
+func openAIAccountDrainPoolHasNormalAPIKey(candidates []openAIAccountCandidateScore) bool {
+	for _, candidate := range candidates {
+		if candidate.account != nil &&
+			candidate.account.Type == AccountTypeAPIKey &&
+			candidate.apiKeyTTFTDemotion != openAIAPIKeyTTFTDemoted {
+			return true
+		}
+	}
+	return false
+}
+
+func openAIAccountDrainCandidateIDs(candidates []openAIAccountCandidateScore) map[int64]struct{} {
+	out := make(map[int64]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.account != nil && candidate.account.ID > 0 {
+			out[candidate.account.ID] = struct{}{}
+		}
+	}
+	return out
 }
 
 func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
@@ -621,18 +857,25 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		}
 		errorRate, ttft, hasTTFT := 0.0, 0.0, false
 		latencyHealth := openAIAccountLatencyHealthy
+		apiKeyTTFTDemotion := openAIAPIKeyTTFTNormal
+		apiKeyTTFTProbeDue := false
 		if s.stats != nil {
 			latency := s.stats.latencySnapshot(account.ID, latencyCfg)
 			errorRate, ttft, hasTTFT = latency.errorRate, latency.ttft, latency.hasTTFT
 			latencyHealth = latency.health
+			apiKeyDemotion := s.stats.apiKeyTTFTDemotionSnapshot(account)
+			apiKeyTTFTDemotion = apiKeyDemotion.state
+			apiKeyTTFTProbeDue = apiKeyDemotion.probeDue
 		}
 		allCandidates = append(allCandidates, openAIAccountCandidateScore{
-			account:       account,
-			loadInfo:      loadInfo,
-			errorRate:     errorRate,
-			ttft:          ttft,
-			hasTTFT:       hasTTFT,
-			latencyHealth: latencyHealth,
+			account:            account,
+			loadInfo:           loadInfo,
+			errorRate:          errorRate,
+			ttft:               ttft,
+			hasTTFT:            hasTTFT,
+			latencyHealth:      latencyHealth,
+			apiKeyTTFTDemotion: apiKeyTTFTDemotion,
+			apiKeyTTFTProbeDue: apiKeyTTFTProbeDue,
 		})
 	}
 
@@ -822,6 +1065,156 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 	return buildSelectionOrder(plan.candidates)
 }
 
+func (s *defaultOpenAIAccountScheduler) buildOpenAIDrainSelectionOrder(
+	ctx context.Context,
+	req OpenAIAccountScheduleRequest,
+	plan openAIAccountLoadPlan,
+	drain openAIAccountDrainContext,
+) []openAIAccountCandidateScore {
+	if !drain.enabled || len(plan.selectionOrder) == 0 {
+		return plan.selectionOrder
+	}
+
+	oauthCandidates := make([]openAIAccountCandidateScore, 0, len(plan.selectionOrder))
+	apiKeyCandidates := make([]openAIAccountCandidateScore, 0, len(plan.selectionOrder))
+	for _, candidate := range plan.selectionOrder {
+		if candidate.account == nil {
+			continue
+		}
+		if candidate.account.Type == AccountTypeAPIKey {
+			apiKeyCandidates = append(apiKeyCandidates, candidate)
+			continue
+		}
+		oauthCandidates = append(oauthCandidates, candidate)
+	}
+
+	oauthOrder := s.buildOpenAIDrainPoolOrder(ctx, drain, AccountTypeOAuth, oauthCandidates)
+	apiKeyOrder := s.buildOpenAIDrainPoolOrder(ctx, drain, AccountTypeAPIKey, apiKeyCandidates)
+	if len(oauthOrder) == 0 {
+		return apiKeyOrder
+	}
+	out := make([]openAIAccountCandidateScore, 0, len(oauthOrder)+len(apiKeyOrder))
+	out = append(out, oauthOrder...)
+	out = append(out, apiKeyOrder...)
+	return out
+}
+
+func (s *defaultOpenAIAccountScheduler) buildOpenAIDrainPoolOrder(
+	ctx context.Context,
+	drain openAIAccountDrainContext,
+	accountType string,
+	candidates []openAIAccountCandidateScore,
+) []openAIAccountCandidateScore {
+	if len(candidates) == 0 {
+		return nil
+	}
+	var ordered []openAIAccountCandidateScore
+	if accountType == AccountTypeAPIKey {
+		ordered = sortOpenAIAPIKeyDrainSelectionOrder(candidates)
+	} else {
+		ordered = sortOpenAILatencyAwareSelectionOrder(candidates)
+	}
+
+	bucket := NewSchedulerDrainTargetBucket(drain.bucket, accountType)
+	targetID, hasTarget := s.getOpenAIAccountDrainTarget(ctx, drain, bucket)
+	if !hasTarget || targetID <= 0 {
+		return markOpenAIDrainCandidates(ordered, bucket, 0, 0, false)
+	}
+
+	candidateIDs := openAIAccountDrainCandidateIDs(ordered)
+	if _, ok := candidateIDs[targetID]; !ok {
+		if !openAIAccountDrainHardEligible(drain, accountType, targetID) {
+			return markOpenAIDrainCandidates(ordered, bucket, 0, targetID, false)
+		}
+		return markOpenAIDrainCandidates(ordered, bucket, 0, 0, true)
+	}
+
+	target := openAIAccountDrainCandidateByID(ordered, targetID)
+	if accountType == AccountTypeAPIKey &&
+		target != nil &&
+		target.apiKeyTTFTDemotion == openAIAPIKeyTTFTDemoted &&
+		openAIAccountDrainPoolHasNormalAPIKey(ordered) {
+		return markOpenAIDrainCandidates(sortOpenAIAPIKeyDrainReplacementOrder(ordered), bucket, targetID, targetID, false)
+	}
+
+	out := make([]openAIAccountCandidateScore, 0, len(ordered))
+	if accountType == AccountTypeAPIKey {
+		for _, candidate := range ordered {
+			if candidate.account == nil || !candidate.apiKeyTTFTProbeDue || candidate.account.ID == targetID {
+				continue
+			}
+			candidate.drainBucket = bucket
+			out = append(out, candidate)
+		}
+	}
+	for _, candidate := range ordered {
+		if candidate.account != nil && candidate.account.ID == targetID {
+			candidate.drainBucket = bucket
+			out = append(out, candidate)
+			break
+		}
+	}
+	for _, candidate := range ordered {
+		if candidate.account != nil && candidate.account.ID == targetID {
+			continue
+		}
+		if accountType == AccountTypeAPIKey && candidate.apiKeyTTFTProbeDue {
+			continue
+		}
+		candidate.drainBucket = bucket
+		out = append(out, candidate)
+	}
+	return out
+}
+
+func markOpenAIDrainCandidates(
+	candidates []openAIAccountCandidateScore,
+	bucket SchedulerDrainTargetBucket,
+	demotedTargetID int64,
+	replaceTargetID int64,
+	claimBlocked bool,
+) []openAIAccountCandidateScore {
+	out := append([]openAIAccountCandidateScore(nil), candidates...)
+	for i := range out {
+		out[i].drainBucket = bucket
+		out[i].drainClaimBlocked = claimBlocked
+		out[i].drainCanClaim = !claimBlocked && replaceTargetID == 0 && demotedTargetID == 0
+		if out[i].apiKeyTTFTProbeDue {
+			out[i].drainCanClaim = false
+			continue
+		}
+		if replaceTargetID > 0 {
+			out[i].drainCanClaim = false
+			if demotedTargetID > 0 && out[i].account != nil && out[i].account.Type == AccountTypeAPIKey && out[i].apiKeyTTFTDemotion == openAIAPIKeyTTFTDemoted {
+				continue
+			}
+			out[i].drainReplaceTarget = replaceTargetID
+		}
+	}
+	return out
+}
+
+func openAIAccountDrainCandidateByID(candidates []openAIAccountCandidateScore, accountID int64) *openAIAccountCandidateScore {
+	for i := range candidates {
+		if candidates[i].account != nil && candidates[i].account.ID == accountID {
+			return &candidates[i]
+		}
+	}
+	return nil
+}
+
+func openAIAccountDrainHardEligible(drain openAIAccountDrainContext, accountType string, accountID int64) bool {
+	if accountID <= 0 || drain.hardEligible == nil {
+		return false
+	}
+	ids := drain.hardEligible[accountType]
+	if len(ids) == 0 {
+		return false
+	}
+	_, ok := ids[accountID]
+	return ok
+}
+
 func sortOpenAILatencyAwareSelectionOrder(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
 	if len(pool) == 0 {
 		return nil
@@ -853,6 +1246,50 @@ func sortOpenAILatencyAwareSelectionOrder(pool []openAIAccountCandidateScore) []
 		}
 		return dedicatedAccountLess(a.account, b.account)
 	})
+	return ordered
+}
+
+func sortOpenAIAPIKeyDrainSelectionOrder(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
+	if len(pool) == 0 {
+		return nil
+	}
+	probe := make([]openAIAccountCandidateScore, 0, len(pool))
+	normal := make([]openAIAccountCandidateScore, 0, len(pool))
+	demoted := make([]openAIAccountCandidateScore, 0, len(pool))
+	for _, candidate := range pool {
+		if candidate.apiKeyTTFTProbeDue {
+			probe = append(probe, candidate)
+			continue
+		}
+		if candidate.apiKeyTTFTDemotion == openAIAPIKeyTTFTDemoted {
+			demoted = append(demoted, candidate)
+			continue
+		}
+		normal = append(normal, candidate)
+	}
+	ordered := make([]openAIAccountCandidateScore, 0, len(pool))
+	ordered = append(ordered, sortOpenAILatencyAwareSelectionOrder(probe)...)
+	ordered = append(ordered, sortOpenAILatencyAwareSelectionOrder(normal)...)
+	ordered = append(ordered, sortOpenAILatencyAwareSelectionOrder(demoted)...)
+	return ordered
+}
+
+func sortOpenAIAPIKeyDrainReplacementOrder(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
+	if len(pool) == 0 {
+		return nil
+	}
+	normal := make([]openAIAccountCandidateScore, 0, len(pool))
+	demoted := make([]openAIAccountCandidateScore, 0, len(pool))
+	for _, candidate := range pool {
+		if candidate.apiKeyTTFTDemotion == openAIAPIKeyTTFTDemoted {
+			demoted = append(demoted, candidate)
+			continue
+		}
+		normal = append(normal, candidate)
+	}
+	ordered := make([]openAIAccountCandidateScore, 0, len(pool))
+	ordered = append(ordered, sortOpenAILatencyAwareSelectionOrder(normal)...)
+	ordered = append(ordered, sortOpenAILatencyAwareSelectionOrder(demoted)...)
 	return ordered
 }
 
@@ -901,6 +1338,7 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrder(
 	ctx context.Context,
 	req OpenAIAccountScheduleRequest,
 	selectionOrder []openAIAccountCandidateScore,
+	drain openAIAccountDrainContext,
 ) (*AccountSelectionResult, bool, error) {
 	compactBlocked := false
 	for i := 0; i < len(selectionOrder); i++ {
@@ -922,6 +1360,12 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrder(
 			return nil, compactBlocked, acquireErr
 		}
 		if result != nil && result.Acquired {
+			if !s.commitOpenAIAccountSelectionAfterAcquire(ctx, candidate, fresh.ID, drain) {
+				if result.ReleaseFunc != nil {
+					result.ReleaseFunc()
+				}
+				continue
+			}
 			if req.SessionHash != "" && !req.PreserveStickyBinding {
 				_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, fresh.ID)
 			}
@@ -933,6 +1377,57 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrder(
 		}
 	}
 	return nil, compactBlocked, nil
+}
+
+func (s *defaultOpenAIAccountScheduler) commitOpenAIAccountSelectionAfterAcquire(
+	ctx context.Context,
+	candidate openAIAccountCandidateScore,
+	accountID int64,
+	drain openAIAccountDrainContext,
+) bool {
+	if !s.commitOpenAIAccountDrainSelection(ctx, candidate, accountID, drain) {
+		return false
+	}
+	if candidate.apiKeyTTFTProbeDue && s != nil && s.stats != nil {
+		s.stats.recordAPIKeyTTFTDemotionProbe(accountID)
+	}
+	return true
+}
+
+func (s *defaultOpenAIAccountScheduler) commitOpenAIAccountDrainSelection(
+	ctx context.Context,
+	candidate openAIAccountCandidateScore,
+	accountID int64,
+	drain openAIAccountDrainContext,
+) bool {
+	if !drain.enabled || candidate.drainClaimBlocked || accountID <= 0 || candidate.drainBucket.AccountType == "" {
+		return true
+	}
+	if candidate.drainReplaceTarget > 0 && candidate.drainReplaceTarget != accountID {
+		return s.setOpenAIAccountDrainTarget(ctx, candidate.drainBucket, candidate.drainReplaceTarget, accountID, drain)
+	}
+	if candidate.drainCanClaim {
+		return s.setOpenAIAccountDrainTarget(ctx, candidate.drainBucket, 0, accountID, drain)
+	}
+	return true
+}
+
+func (s *defaultOpenAIAccountScheduler) buildOpenAIDrainWaitCommit(
+	candidate openAIAccountCandidateScore,
+	accountID int64,
+	drain openAIAccountDrainContext,
+) func(context.Context) bool {
+	if accountID <= 0 {
+		return nil
+	}
+	needsDrainCommit := drain.enabled && !candidate.drainClaimBlocked && candidate.drainBucket.AccountType != "" &&
+		(candidate.drainReplaceTarget > 0 || candidate.drainCanClaim)
+	if !needsDrainCommit && !candidate.apiKeyTTFTProbeDue {
+		return nil
+	}
+	return func(ctx context.Context) bool {
+		return s.commitOpenAIAccountSelectionAfterAcquire(ctx, candidate, accountID, drain)
+	}
 }
 
 func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
@@ -955,13 +1450,9 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 
 	filtered := make([]*Account, 0, len(accounts))
 	loadReq := make([]AccountWithConcurrency, 0, len(accounts))
+	hardEligible := make(map[string]map[int64]struct{}, 2)
 	for i := range accounts {
 		account := &accounts[i]
-		if req.ExcludedIDs != nil {
-			if _, excluded := req.ExcludedIDs[account.ID]; excluded {
-				continue
-			}
-		}
 		if !account.IsSchedulable() || account.Platform != normalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() {
 			continue
 		}
@@ -974,6 +1465,24 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 			_ = s.service.accountRepo.SetError(ctx, account.ID,
 				fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
 			continue
+		}
+		if paused, _ := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
+			continue
+		}
+		if !parentHealthyForShadow(account, func(id int64) *Account {
+			return s.lookupShadowParentAccount(ctx, id)
+		}) {
+			continue
+		}
+		poolType := openAIAccountDrainPoolType(account)
+		if hardEligible[poolType] == nil {
+			hardEligible[poolType] = make(map[int64]struct{})
+		}
+		hardEligible[poolType][account.ID] = struct{}{}
+		if req.ExcludedIDs != nil {
+			if _, excluded := req.ExcludedIDs[account.ID]; excluded {
+				continue
+			}
 		}
 		if !s.isAccountRequestCompatible(ctx, account, req) {
 			continue
@@ -1002,7 +1511,8 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	candidateCount := plan.candidateCount
 	topK := plan.topK
 	loadSkew := plan.loadSkew
-	selectionOrder := plan.selectionOrder
+	drain := s.buildOpenAIAccountDrainContext(req, hardEligible)
+	selectionOrder := s.buildOpenAIDrainSelectionOrder(ctx, req, plan, drain)
 	if req.RequireCompact && len(plan.candidates) == 0 && len(plan.staleSnapshotCompactRetry) == 0 {
 		return nil, 0, 0, 0, ErrNoAvailableCompactAccounts
 	}
@@ -1013,7 +1523,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		return nil, candidateCount, topK, loadSkew, noAvailableOpenAISelectionError(req.RequestedModel, req.RequireCompact && len(plan.allCandidates) > 0)
 	}
 
-	result, compactBlocked, acquireErr := s.tryAcquireOpenAISelectionOrder(ctx, req, selectionOrder)
+	result, compactBlocked, acquireErr := s.tryAcquireOpenAISelectionOrder(ctx, req, selectionOrder, drain)
 	if acquireErr != nil {
 		return nil, candidateCount, topK, loadSkew, acquireErr
 	}
@@ -1024,8 +1534,9 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	if s.service.concurrencyService != nil {
 		if freshLoadMap, loadErr := s.service.concurrencyService.GetAccountsLoadBatchFresh(ctx, loadReq); loadErr == nil {
 			freshPlan := s.buildOpenAIAccountLoadPlan(req, filtered, freshLoadMap)
-			if len(freshPlan.selectionOrder) > 0 {
-				freshResult, freshCompactBlocked, freshAcquireErr := s.tryAcquireOpenAISelectionOrder(ctx, req, freshPlan.selectionOrder)
+			freshSelectionOrder := s.buildOpenAIDrainSelectionOrder(ctx, req, freshPlan, drain)
+			if len(freshSelectionOrder) > 0 {
+				freshResult, freshCompactBlocked, freshAcquireErr := s.tryAcquireOpenAISelectionOrder(ctx, req, freshSelectionOrder, drain)
 				if freshAcquireErr != nil {
 					return nil, candidateCount, topK, loadSkew, freshAcquireErr
 				}
@@ -1033,7 +1544,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 					return freshResult, freshPlan.candidateCount, freshPlan.topK, freshPlan.loadSkew, nil
 				}
 				compactBlocked = compactBlocked || freshCompactBlocked
-				selectionOrder = freshPlan.selectionOrder
+				selectionOrder = freshSelectionOrder
 				candidateCount = freshPlan.candidateCount
 				topK = freshPlan.topK
 				loadSkew = freshPlan.loadSkew
@@ -1059,10 +1570,11 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		return &AccountSelectionResult{
 			Account: fresh,
 			WaitPlan: &AccountWaitPlan{
-				AccountID:      fresh.ID,
-				MaxConcurrency: fresh.Concurrency,
-				Timeout:        cfg.FallbackWaitTimeout,
-				MaxWaiting:     cfg.FallbackMaxWaiting,
+				AccountID:          fresh.ID,
+				MaxConcurrency:     fresh.Concurrency,
+				Timeout:            cfg.FallbackWaitTimeout,
+				MaxWaiting:         cfg.FallbackMaxWaiting,
+				CommitAfterAcquire: s.buildOpenAIDrainWaitCommit(candidate, fresh.ID, drain),
 			},
 		}, candidateCount, topK, loadSkew, nil
 	}

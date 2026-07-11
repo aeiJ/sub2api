@@ -1126,6 +1126,11 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 		return nil, false
 	}
 	if fastAcquired {
+		if !commitAccountWaitPlanAfterAcquire(ctx, reqLog, selection.WaitPlan, account.ID, fastReleaseFunc) {
+			markOpsRoutingCapacityLimited(c)
+			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", *streamStarted)
+			return nil, false
+		}
 		if err := h.gatewayService.BindStickySession(ctx, groupID, sessionHash, account.ID); err != nil {
 			reqLog.Warn("openai.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		}
@@ -1169,10 +1174,31 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 
 	// Slot acquired: no longer waiting in queue.
 	releaseWait()
+	if !commitAccountWaitPlanAfterAcquire(ctx, reqLog, selection.WaitPlan, account.ID, accountReleaseFunc) {
+		markOpsRoutingCapacityLimited(c)
+		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", *streamStarted)
+		return nil, false
+	}
 	if err := h.gatewayService.BindStickySession(ctx, groupID, sessionHash, account.ID); err != nil {
 		reqLog.Warn("openai.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 	}
 	return wrapReleaseOnDone(ctx, accountReleaseFunc), true
+}
+
+func commitAccountWaitPlanAfterAcquire(ctx context.Context, reqLog *zap.Logger, waitPlan *service.AccountWaitPlan, accountID int64, release func()) bool {
+	if waitPlan == nil || waitPlan.CommitAfterAcquire == nil {
+		return true
+	}
+	if waitPlan.CommitAfterAcquire(ctx) {
+		return true
+	}
+	if release != nil {
+		release()
+	}
+	if reqLog != nil {
+		reqLog.Warn("account_wait_plan_commit_failed", zap.Int64("account_id", accountID))
+	}
+	return false
 }
 
 // ResponsesWebSocket handles OpenAI Responses API WebSocket ingress endpoint
@@ -1426,6 +1452,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				return
 			}
 			if !fastAcquired {
+				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "account is busy, please retry later")
+				return
+			}
+			if !commitAccountWaitPlanAfterAcquire(ctx, reqLog, selection.WaitPlan, account.ID, fastReleaseFunc) {
 				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "account is busy, please retry later")
 				return
 			}

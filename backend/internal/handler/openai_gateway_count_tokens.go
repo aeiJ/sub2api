@@ -15,8 +15,9 @@ import (
 )
 
 // CountTokens handles Anthropic-compatible POST /v1/messages/count_tokens for OpenAI groups.
-// It validates billing and routes to an OpenAI token-count bridge without taking concurrency slots
-// or recording usage.
+// It validates billing and routes to an OpenAI token-count bridge without recording usage.
+// If scheduler selection returns a wait plan, it takes an account slot so drain target commits
+// stay consistent with normal OpenAI dispatch.
 func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
@@ -133,8 +134,55 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 
 	account := selection.Account
 	setOpsSelectedAccount(c, account.ID, account.Platform)
-	if selection.Acquired && selection.ReleaseFunc != nil {
-		defer selection.ReleaseFunc()
+	streamStarted := false
+	accountReleaseFunc := selection.ReleaseFunc
+	if !selection.Acquired {
+		if selection.WaitPlan == nil {
+			markOpsRoutingCapacityLimited(c)
+			h.anthropicErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts")
+			return
+		}
+		canWait, waitErr := h.concurrencyHelper.IncrementAccountWaitCount(c.Request.Context(), account.ID, selection.WaitPlan.MaxWaiting)
+		if waitErr != nil {
+			reqLog.Warn("openai_count_tokens.account_wait_counter_increment_failed", zap.Int64("account_id", account.ID), zap.Error(waitErr))
+		} else if !canWait {
+			reqLog.Info("openai_count_tokens.account_wait_queue_full",
+				zap.Int64("account_id", account.ID),
+				zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
+			)
+			h.anthropicErrorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Too many pending requests, please retry later")
+			return
+		}
+		accountWaitCounted := waitErr == nil && canWait
+		releaseWait := func() {
+			if accountWaitCounted {
+				h.concurrencyHelper.DecrementAccountWaitCount(c.Request.Context(), account.ID)
+				accountWaitCounted = false
+			}
+		}
+		defer releaseWait()
+		accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
+			c,
+			account.ID,
+			selection.WaitPlan.MaxConcurrency,
+			selection.WaitPlan.Timeout,
+			false,
+			&streamStarted,
+		)
+		if err != nil {
+			reqLog.Warn("openai_count_tokens.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+			h.handleConcurrencyError(c, err, "account", false)
+			return
+		}
+		releaseWait()
+		if !commitAccountWaitPlanAfterAcquire(c.Request.Context(), reqLog, selection.WaitPlan, account.ID, accountReleaseFunc) {
+			markOpsRoutingCapacityLimited(c)
+			h.anthropicErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts")
+			return
+		}
+	}
+	if accountReleaseFunc != nil {
+		defer wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)()
 	}
 	forwardBody := mappedBodyForMessages(channelMapping.Mapped, channelMapping.MappedModel)
 	defaultMappedModel := preferredMappedModel

@@ -77,6 +77,22 @@ func (s *schedulerCacheRecorder) ListBuckets(ctx context.Context) ([]service.Sch
 	return nil, nil
 }
 
+func (s *schedulerCacheRecorder) GetDrainTarget(ctx context.Context, bucket service.SchedulerDrainTargetBucket) (int64, bool, error) {
+	return 0, false, nil
+}
+
+func (s *schedulerCacheRecorder) TryClaimDrainTarget(ctx context.Context, bucket service.SchedulerDrainTargetBucket, accountID int64) (bool, error) {
+	return false, nil
+}
+
+func (s *schedulerCacheRecorder) AdvanceDrainTarget(ctx context.Context, bucket service.SchedulerDrainTargetBucket, expectedAccountID, nextAccountID int64) (bool, error) {
+	return false, nil
+}
+
+func (s *schedulerCacheRecorder) ClearDrainTarget(ctx context.Context, bucket service.SchedulerDrainTargetBucket, expectedAccountID int64) (bool, error) {
+	return false, nil
+}
+
 func (s *schedulerCacheRecorder) GetOutboxWatermark(ctx context.Context) (int64, error) {
 	return 0, nil
 }

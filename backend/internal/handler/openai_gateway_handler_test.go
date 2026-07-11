@@ -94,6 +94,22 @@ func TestOpenAIHandleStreamingAwareError_JSONEscaping(t *testing.T) {
 	}
 }
 
+func TestCommitAccountWaitPlanAfterAcquireFailureReleasesOnce(t *testing.T) {
+	releaseCalls := 0
+	waitPlan := &service.AccountWaitPlan{
+		CommitAfterAcquire: func(context.Context) bool {
+			return false
+		},
+	}
+
+	ok := commitAccountWaitPlanAfterAcquire(context.Background(), nil, waitPlan, 1001, func() {
+		releaseCalls++
+	})
+
+	require.False(t, ok)
+	require.Equal(t, 1, releaseCalls)
+}
+
 func TestResolveOpenAIMessagesMetadataSession_DoesNotDerivePromptCacheKey(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-4-5","metadata":{"user_id":"claude-code-session"},"messages":[{"role":"user","content":"hello"}]}`)
 

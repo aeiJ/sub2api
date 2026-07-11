@@ -21,6 +21,7 @@ const (
 	schedulerVersionPrefix      = "sched:ver:"
 	schedulerSnapshotPrefix     = "sched:"
 	schedulerLockPrefix         = "sched:lock:"
+	schedulerDrainTargetPrefix  = "sched:drain:"
 
 	defaultSchedulerSnapshotMGetChunkSize  = 128
 	defaultSchedulerSnapshotWriteChunkSize = 256
@@ -66,7 +67,40 @@ if currentActive ~= false and currentActive ~= ARGV[1] then
 end
 
 return 1
-`)
+	`)
+
+	claimDrainTargetScript = redis.NewScript(`
+local current = redis.call('GET', KEYS[1])
+
+if current == false or current == ARGV[1] then
+	redis.call('SET', KEYS[1], ARGV[1])
+	return 1
+end
+
+return 0
+	`)
+
+	advanceDrainTargetScript = redis.NewScript(`
+local current = redis.call('GET', KEYS[1])
+
+if current ~= ARGV[1] then
+	return 0
+end
+
+redis.call('SET', KEYS[1], ARGV[2])
+return 1
+	`)
+
+	clearDrainTargetScript = redis.NewScript(`
+local current = redis.call('GET', KEYS[1])
+
+if current ~= ARGV[1] then
+	return 0
+end
+
+redis.call('DEL', KEYS[1])
+return 1
+	`)
 )
 
 type schedulerCache struct {
@@ -303,6 +337,77 @@ func (c *schedulerCache) ListBuckets(ctx context.Context) ([]service.SchedulerBu
 	return out, nil
 }
 
+func (c *schedulerCache) GetDrainTarget(ctx context.Context, bucket service.SchedulerDrainTargetBucket) (int64, bool, error) {
+	val, err := c.rdb.Get(ctx, schedulerDrainTargetKey(bucket)).Result()
+	if err == redis.Nil {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+
+	accountID, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return 0, false, err
+	}
+	if accountID <= 0 {
+		return 0, false, fmt.Errorf("invalid scheduler drain target account id: %d", accountID)
+	}
+	return accountID, true, nil
+}
+
+func (c *schedulerCache) TryClaimDrainTarget(ctx context.Context, bucket service.SchedulerDrainTargetBucket, accountID int64) (bool, error) {
+	if accountID <= 0 {
+		return false, nil
+	}
+
+	result, err := claimDrainTargetScript.Run(
+		ctx,
+		c.rdb,
+		[]string{schedulerDrainTargetKey(bucket)},
+		strconv.FormatInt(accountID, 10),
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (c *schedulerCache) AdvanceDrainTarget(ctx context.Context, bucket service.SchedulerDrainTargetBucket, expectedAccountID, nextAccountID int64) (bool, error) {
+	if expectedAccountID <= 0 || nextAccountID <= 0 {
+		return false, nil
+	}
+
+	result, err := advanceDrainTargetScript.Run(
+		ctx,
+		c.rdb,
+		[]string{schedulerDrainTargetKey(bucket)},
+		strconv.FormatInt(expectedAccountID, 10),
+		strconv.FormatInt(nextAccountID, 10),
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (c *schedulerCache) ClearDrainTarget(ctx context.Context, bucket service.SchedulerDrainTargetBucket, expectedAccountID int64) (bool, error) {
+	if expectedAccountID <= 0 {
+		return false, nil
+	}
+
+	result, err := clearDrainTargetScript.Run(
+		ctx,
+		c.rdb,
+		[]string{schedulerDrainTargetKey(bucket)},
+		strconv.FormatInt(expectedAccountID, 10),
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
 func (c *schedulerCache) GetOutboxWatermark(ctx context.Context) (int64, error) {
 	val, err := c.rdb.Get(ctx, schedulerOutboxWatermarkKey).Result()
 	if err == redis.Nil {
@@ -328,6 +433,10 @@ func schedulerBucketKey(prefix string, bucket service.SchedulerBucket) string {
 
 func schedulerSnapshotKey(bucket service.SchedulerBucket, version string) string {
 	return fmt.Sprintf("%s%d:%s:%s:v%s", schedulerSnapshotPrefix, bucket.GroupID, bucket.Platform, bucket.Mode, version)
+}
+
+func schedulerDrainTargetKey(bucket service.SchedulerDrainTargetBucket) string {
+	return schedulerDrainTargetPrefix + bucket.String()
 }
 
 func schedulerAccountKey(id string) string {

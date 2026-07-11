@@ -3,11 +3,101 @@
 package repository
 
 import (
+	"context"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
+
+func newSchedulerCacheUnitTest(t *testing.T) (*schedulerCache, *miniredis.Miniredis) {
+	t.Helper()
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	return newSchedulerCacheWithChunkSizes(rdb, 2, 2).(*schedulerCache), mr
+}
+
+func TestSchedulerDrainTargetBucket_NormalizesKeyDimensions(t *testing.T) {
+	base := service.SchedulerBucket{
+		GroupID:  12,
+		Platform: " OpenAI ",
+		Mode:     " Mixed ",
+	}
+
+	bucket := service.NewSchedulerDrainTargetBucket(base, " OAuth ")
+
+	require.Equal(t, "12:openai:mixed:oauth", bucket.String())
+	require.Equal(t, "sched:drain:12:openai:mixed:oauth", schedulerDrainTargetKey(bucket))
+
+	parsed, ok := service.ParseSchedulerDrainTargetBucket("12:OpenAI:Mixed:OAuth")
+	require.True(t, ok)
+	require.Equal(t, bucket, parsed)
+}
+
+func TestSchedulerCache_DrainTargetClaimAdvanceAndClearCAS(t *testing.T) {
+	cache, _ := newSchedulerCacheUnitTest(t)
+	ctx := context.Background()
+	bucket := service.NewSchedulerDrainTargetBucket(
+		service.SchedulerBucket{GroupID: 7, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeMixed},
+		service.AccountTypeOAuth,
+	)
+
+	accountID, ok, err := cache.GetDrainTarget(ctx, bucket)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Zero(t, accountID)
+
+	claimed, err := cache.TryClaimDrainTarget(ctx, bucket, 101)
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	accountID, ok, err = cache.GetDrainTarget(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, int64(101), accountID)
+
+	claimed, err = cache.TryClaimDrainTarget(ctx, bucket, 101)
+	require.NoError(t, err)
+	require.True(t, claimed, "claim should be idempotent for the current target")
+
+	claimed, err = cache.TryClaimDrainTarget(ctx, bucket, 202)
+	require.NoError(t, err)
+	require.False(t, claimed, "claim must not overwrite another current target")
+
+	advanced, err := cache.AdvanceDrainTarget(ctx, bucket, 202, 303)
+	require.NoError(t, err)
+	require.False(t, advanced, "stale expected target must not advance")
+
+	accountID, ok, err = cache.GetDrainTarget(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, int64(101), accountID)
+
+	advanced, err = cache.AdvanceDrainTarget(ctx, bucket, 101, 303)
+	require.NoError(t, err)
+	require.True(t, advanced)
+
+	accountID, ok, err = cache.GetDrainTarget(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, int64(303), accountID)
+
+	cleared, err := cache.ClearDrainTarget(ctx, bucket, 101)
+	require.NoError(t, err)
+	require.False(t, cleared, "stale clear must not remove a newer target")
+
+	cleared, err = cache.ClearDrainTarget(ctx, bucket, 303)
+	require.NoError(t, err)
+	require.True(t, cleared)
+
+	accountID, ok, err = cache.GetDrainTarget(ctx, bucket)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Zero(t, accountID)
+}
 
 func TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags(t *testing.T) {
 	account := service.Account{
