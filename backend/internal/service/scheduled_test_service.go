@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -29,7 +30,8 @@ func NewScheduledTestService(
 
 // CreatePlan validates the cron expression, computes next_run_at, and persists the plan.
 func (s *ScheduledTestService) CreatePlan(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestPlan, error) {
-	nextRun, err := computeNextRun(plan.CronExpression, time.Now())
+	ensureScheduledTestPurpose(plan)
+	nextRun, err := computeScheduledTestNextRun(plan, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("invalid cron expression: %w", err)
 	}
@@ -54,7 +56,8 @@ func (s *ScheduledTestService) ListPlansByAccount(ctx context.Context, accountID
 
 // UpdatePlan validates cron and updates the plan.
 func (s *ScheduledTestService) UpdatePlan(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestPlan, error) {
-	nextRun, err := computeNextRun(plan.CronExpression, time.Now())
+	ensureScheduledTestPurpose(plan)
+	nextRun, err := computeScheduledTestNextRun(plan, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("invalid cron expression: %w", err)
 	}
@@ -91,4 +94,36 @@ func computeNextRun(cronExpr string, from time.Time) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return sched.Next(from), nil
+}
+
+func computeNextRunWithJitter(cronExpr string, from time.Time, jitterSeconds int) (time.Time, error) {
+	next, err := computeNextRun(cronExpr, from)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if jitterSeconds <= 0 {
+		return next, nil
+	}
+	return next.Add(time.Duration(rand.IntN(jitterSeconds+1)) * time.Second), nil
+}
+
+func computeScheduledTestNextRun(plan *ScheduledTestPlan, from time.Time) (time.Time, error) {
+	if plan != nil && plan.IntervalMinutes > 0 {
+		next := from.Add(time.Duration(plan.IntervalMinutes) * time.Minute)
+		if plan.JitterSeconds > 0 {
+			offsetSeconds := rand.IntN(plan.JitterSeconds*2+1) - plan.JitterSeconds
+			next = next.Add(time.Duration(offsetSeconds) * time.Second)
+		}
+		return next, nil
+	}
+	if plan == nil {
+		return time.Time{}, fmt.Errorf("scheduled test plan is nil")
+	}
+	return computeNextRunWithJitter(plan.CronExpression, from, plan.JitterSeconds)
+}
+
+func ensureScheduledTestPurpose(plan *ScheduledTestPlan) {
+	if plan != nil && plan.Purpose == "" {
+		plan.Purpose = ScheduledTestPlanPurposeScheduledTest
+	}
 }

@@ -498,6 +498,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/upstreams/monitor',
+    name: 'AdminUpstreamAccountMonitor',
+    component: () => import('@/views/admin/UpstreamAccountMonitorView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Upstream Monitor',
+      titleKey: 'admin.upstreamAccountMonitor.title',
+      descriptionKey: 'admin.upstreamAccountMonitor.description'
+    }
+  },
+  {
     path: '/admin/channels/upstreams',
     redirect: '/admin/upstreams'
   },

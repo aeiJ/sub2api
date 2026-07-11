@@ -42,6 +42,25 @@ describe('AppSidebar scroll position persistence', () => {
   })
 })
 
+describe('AppSidebar admin navigation', () => {
+  it('keeps custom upstream management separate from native channel management', () => {
+    expect(componentSource).toContain("path: '/admin/upstreams'")
+    expect(componentSource).toContain("label: t('nav.upstreamChannels')")
+    expect(componentSource).toContain('expandOnly: true')
+    expect(componentSource).toContain("path: '/admin/upstreams'")
+    expect(componentSource).toContain("label: t('nav.upstreamAccounts')")
+    expect(componentSource).toContain("path: '/admin/upstreams/monitor'")
+    expect(componentSource).toContain("label: t('nav.upstreamMonitor')")
+
+    expect(componentSource).toContain("path: '/admin/channels'")
+    expect(componentSource).toContain("label: t('nav.channelManagement')")
+    expect(componentSource).toContain("path: '/admin/channels/pricing'")
+    expect(componentSource).toContain("label: t('nav.channelPricing')")
+    expect(componentSource).toContain("path: '/admin/channels/monitor'")
+    expect(componentSource).toContain("label: t('nav.channelMonitor')")
+  })
+})
+
 describe('AppSidebar header styles', () => {
   it('does not clip the version badge dropdown', () => {
     const sidebarHeaderBlockMatch = styleSource.match(/\.sidebar-header\s*\{[\s\S]*?\n {2}\}/)

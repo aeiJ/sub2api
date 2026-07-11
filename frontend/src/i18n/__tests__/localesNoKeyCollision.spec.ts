@@ -6,6 +6,7 @@ import enAdminOps from '../locales/en/admin/ops'
 import enAdminOverview from '../locales/en/admin/overview'
 import enAdminResources from '../locales/en/admin/resources'
 import enAdminSettings from '../locales/en/admin/settings'
+import enAdminUpstreams from '../locales/en/admin/upstreams'
 import enCommon from '../locales/en/common'
 import enDashboard from '../locales/en/dashboard'
 import enLanding from '../locales/en/landing'
@@ -16,6 +17,7 @@ import zhAdminOps from '../locales/zh/admin/ops'
 import zhAdminOverview from '../locales/zh/admin/overview'
 import zhAdminResources from '../locales/zh/admin/resources'
 import zhAdminSettings from '../locales/zh/admin/settings'
+import zhAdminUpstreams from '../locales/zh/admin/upstreams'
 import zhCommon from '../locales/zh/common'
 import zhDashboard from '../locales/zh/dashboard'
 import zhLanding from '../locales/zh/landing'
@@ -50,6 +52,7 @@ const admins: Record<string, Modules> = {
   zh: {
     overview: zhAdminOverview,
     channels: zhAdminChannels,
+    upstreams: zhAdminUpstreams,
     accounts: zhAdminAccounts,
     resources: zhAdminResources,
     ops: zhAdminOps,
@@ -58,6 +61,7 @@ const admins: Record<string, Modules> = {
   en: {
     overview: enAdminOverview,
     channels: enAdminChannels,
+    upstreams: enAdminUpstreams,
     accounts: enAdminAccounts,
     resources: enAdminResources,
     ops: enAdminOps,
@@ -78,5 +82,21 @@ describe.each(Object.keys(roots))('locale %s spread assembly', (locale) => {
 
   it('admin modules have no overlapping top-level keys', () => {
     expect(collisions(admins[locale])).toEqual([])
+  })
+})
+
+describe('common nav locale keys', () => {
+  it('keeps custom upstream nav labels distinct from native channel monitor labels', () => {
+    expect(enCommon.nav.upstreamChannels).toBe('Upstream Management')
+    expect(enCommon.nav.upstreamAccounts).toBe('Upstream Accounts')
+    expect(enCommon.nav.upstreamMonitor).toBe('Upstream Monitor')
+    expect(enCommon.nav.channelMonitor).toBe('Channel Monitor')
+    expect(enCommon.nav.upstreamMonitor).not.toBe(enCommon.nav.channelMonitor)
+
+    expect(zhCommon.nav.upstreamChannels).toBe('上游管理')
+    expect(zhCommon.nav.upstreamAccounts).toBe('上游账号')
+    expect(zhCommon.nav.upstreamMonitor).toBe('上游监控')
+    expect(zhCommon.nav.channelMonitor).toBe('渠道监控')
+    expect(zhCommon.nav.upstreamMonitor).not.toBe(zhCommon.nav.channelMonitor)
   })
 })
