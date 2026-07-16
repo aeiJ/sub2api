@@ -111,10 +111,18 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "ops_system_logs", "api_key_id", "bigint", 0, true)
 	requireIndex(t, tx, "ops_system_logs", "idx_ops_system_logs_api_key_id_created_at")
 
-	// upstream_key_pools: upstream-side multiplier distinct from local synced multipliers
-	requireColumn(t, tx, "upstream_key_pools", "upstream_group_rate_multiplier", "numeric", 0, false)
-	requireColumn(t, tx, "upstream_keys", "supported_models", "jsonb", 0, false)
-	requireColumn(t, tx, "upstream_keys", "last_test_model", "character varying", 128, false)
+	// Retired upstream management tables should be removed by the latest migration.
+	for _, table := range []string{
+		"upstream_channels",
+		"upstream_platforms",
+		"upstream_key_pools",
+		"upstream_keys",
+		"upstream_sync_events",
+	} {
+		var regclass sql.NullString
+		require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass($1)", "public."+table).Scan(&regclass))
+		require.False(t, regclass.Valid, "expected %s table to be removed", table)
+	}
 
 	// user_allowed_groups table should exist
 	var uagRegclass sql.NullString

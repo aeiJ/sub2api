@@ -183,9 +183,6 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 }
 
 func (s *ScheduledTestRunnerService) runPlanTest(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestResult, error) {
-	if plan != nil && plan.Purpose == ScheduledTestPlanPurposeUpstreamMonitor {
-		return s.accountTestSvc.RunTestBackgroundWithEndpointPing(ctx, plan.AccountID, plan.ModelID)
-	}
 	return s.accountTestSvc.RunTestBackground(ctx, plan.AccountID, plan.ModelID)
 }
 

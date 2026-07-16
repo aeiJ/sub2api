@@ -6,8 +6,7 @@ import (
 )
 
 const (
-	ScheduledTestPlanPurposeScheduledTest   = "scheduled_test"
-	ScheduledTestPlanPurposeUpstreamMonitor = "upstream_monitor"
+	ScheduledTestPlanPurposeScheduledTest = "scheduled_test"
 )
 
 // ScheduledTestPlan represents a scheduled test plan domain model.

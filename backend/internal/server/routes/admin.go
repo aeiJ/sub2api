@@ -97,12 +97,6 @@ func RegisterAdminRoutes(
 		// 渠道管理
 		registerChannelRoutes(admin, h)
 
-		// 上游管理
-		registerUpstreamChannelRoutes(admin, h)
-
-		// 上游账号监控（自定义上游管理模块）
-		registerUpstreamAccountMonitorRoutes(admin, h)
-
 		// 渠道监控
 		registerChannelMonitorRoutes(admin, h)
 
@@ -140,34 +134,6 @@ func registerAdminAPIKeyRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	apiKeys := admin.Group("/api-keys")
 	{
 		apiKeys.PUT("/:id", h.Admin.APIKey.UpdateGroup)
-	}
-}
-
-func registerUpstreamChannelRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
-	upstreams := admin.Group("/upstream-channels")
-	{
-		upstreams.GET("", h.Admin.UpstreamChannel.List)
-		upstreams.POST("", h.Admin.UpstreamChannel.Create)
-		upstreams.GET("/:id", h.Admin.UpstreamChannel.GetByID)
-		upstreams.PUT("/:id", h.Admin.UpstreamChannel.Update)
-		upstreams.DELETE("/:id", h.Admin.UpstreamChannel.Delete)
-		upstreams.POST("/:id/sync-preview", h.Admin.UpstreamChannel.SyncPreview)
-		upstreams.POST("/:id/sync", h.Admin.UpstreamChannel.Sync)
-		upstreams.POST("/:id/test", h.Admin.UpstreamChannel.Test)
-	}
-}
-
-func registerUpstreamAccountMonitorRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
-	monitors := admin.Group("/upstream-account-monitors")
-	{
-		monitors.GET("", h.Admin.UpstreamAccountMonitor.List)
-		monitors.POST("/run-all", h.Admin.UpstreamAccountMonitor.RunAll)
-		monitors.GET("/run-all/stream", h.Admin.UpstreamAccountMonitor.StreamRunAll)
-		monitors.POST("/enable-all", h.Admin.UpstreamAccountMonitor.EnableAll)
-		monitors.POST("/disable-all", h.Admin.UpstreamAccountMonitor.DisableAll)
-		monitors.POST("/batch-settings", h.Admin.UpstreamAccountMonitor.BatchUpdateSettings)
-		monitors.POST("/:accountId/run", h.Admin.UpstreamAccountMonitor.RunOne)
-		monitors.PUT("/:accountId/settings", h.Admin.UpstreamAccountMonitor.UpdateSettings)
 	}
 }
 

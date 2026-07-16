@@ -758,17 +758,6 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/users', label: t('nav.users'), icon: UsersIcon, hideInSimpleMode: true },
     { path: '/admin/groups', label: t('nav.groups'), icon: FolderIcon, hideInSimpleMode: true },
     {
-      path: '/admin/upstreams',
-      label: t('nav.upstreamChannels'),
-      icon: ServerIcon,
-      hideInSimpleMode: true,
-      expandOnly: true,
-      children: [
-        { path: '/admin/upstreams', label: t('nav.upstreamAccounts'), icon: GlobeIcon },
-        { path: '/admin/upstreams/monitor', label: t('nav.upstreamMonitor'), icon: SignalIcon },
-      ],
-    },
-    {
       path: '/admin/channels',
       label: t('nav.channelManagement'),
       icon: ChannelIcon,
