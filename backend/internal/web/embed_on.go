@@ -88,7 +88,7 @@ func (s *FrontendServer) Middleware() gin.HandlerFunc {
 		path := c.Request.URL.Path
 
 		// Skip API routes
-		if shouldBypassEmbeddedFrontend(path) {
+		if shouldBypassEmbeddedFrontendRequest(c.Request) {
 			c.Next()
 			return
 		}
@@ -258,7 +258,7 @@ func ServeEmbeddedFrontend() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
 
-		if shouldBypassEmbeddedFrontend(path) {
+		if shouldBypassEmbeddedFrontendRequest(c.Request) {
 			c.Next()
 			return
 		}
@@ -314,6 +314,24 @@ func shouldBypassEmbeddedFrontend(path string) bool {
 		trimmed == "/alpha/search" ||
 		strings.HasPrefix(trimmed, "/images/") ||
 		strings.HasPrefix(trimmed, "/videos/")
+}
+
+func shouldBypassEmbeddedFrontendRequest(req *http.Request) bool {
+	path := strings.TrimSpace(req.URL.Path)
+	if path == "/models" && acceptsHTML(req.Header.Get("Accept")) {
+		return false
+	}
+	return shouldBypassEmbeddedFrontend(path)
+}
+
+func acceptsHTML(accept string) bool {
+	for _, value := range strings.Split(accept, ",") {
+		mediaType := strings.TrimSpace(strings.SplitN(value, ";", 2)[0])
+		if mediaType == "text/html" || mediaType == "application/xhtml+xml" {
+			return true
+		}
+	}
+	return false
 }
 
 func serveIndexHTML(c *gin.Context, fsys fs.FS) {

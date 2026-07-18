@@ -475,6 +475,30 @@ func TestOverrideFilesNeverReceiveImmutableCacheHeaders(t *testing.T) {
 }
 
 func TestFrontendServer_Middleware(t *testing.T) {
+	t.Run("serves_model_marketplace_for_html_requests", func(t *testing.T) {
+		provider := &mockSettingsProvider{
+			settings: map[string]string{"test": "value"},
+		}
+
+		server, err := NewFrontendServer(provider)
+		require.NoError(t, err)
+
+		router := gin.New()
+		router.Use(server.Middleware())
+		router.GET("/models", func(c *gin.Context) {
+			c.String(http.StatusTeapot, "api handler")
+		})
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/models", nil)
+		req.Header.Set("Accept", "text/html,application/xhtml+xml")
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Contains(t, w.Header().Get("Content-Type"), "text/html")
+		assert.NotContains(t, w.Body.String(), "api handler")
+	})
+
 	t.Run("skips_api_routes", func(t *testing.T) {
 		provider := &mockSettingsProvider{
 			settings: map[string]string{"test": "value"},
