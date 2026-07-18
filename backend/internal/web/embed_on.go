@@ -92,6 +92,7 @@ func (s *FrontendServer) Middleware() gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		prepareEmbeddedFrontendResponse(c)
 
 		cleanPath := strings.TrimPrefix(path, "/")
 		if cleanPath == "" {
@@ -159,7 +160,7 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 		content := replaceNoncePlaceholder(cached.Content, nonce)
 
 		c.Header("ETag", cached.ETag)
-		c.Header("Cache-Control", "no-cache") // Must revalidate
+		applyHTMLCacheControl(c)
 		c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 		c.Abort()
 		return
@@ -195,7 +196,7 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 	if cached != nil {
 		c.Header("ETag", cached.ETag)
 	}
-	c.Header("Cache-Control", "no-cache")
+	applyHTMLCacheControl(c)
 	c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 	c.Abort()
 }
@@ -262,6 +263,7 @@ func ServeEmbeddedFrontend() gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		prepareEmbeddedFrontendResponse(c)
 
 		cleanPath := strings.TrimPrefix(path, "/")
 		if cleanPath == "" {
@@ -318,10 +320,14 @@ func shouldBypassEmbeddedFrontend(path string) bool {
 
 func shouldBypassEmbeddedFrontendRequest(req *http.Request) bool {
 	path := strings.TrimSpace(req.URL.Path)
-	if path == "/models" && acceptsHTML(req.Header.Get("Accept")) {
+	if isModelMarketplaceRequest(req) {
 		return false
 	}
 	return shouldBypassEmbeddedFrontend(path)
+}
+
+func isModelMarketplaceRequest(req *http.Request) bool {
+	return strings.TrimSpace(req.URL.Path) == "/models" && acceptsHTML(req.Header.Get("Accept"))
 }
 
 func acceptsHTML(accept string) bool {
@@ -332,6 +338,26 @@ func acceptsHTML(accept string) bool {
 		}
 	}
 	return false
+}
+
+func prepareEmbeddedFrontendResponse(c *gin.Context) {
+	if !isModelMarketplaceRequest(c.Request) {
+		return
+	}
+
+	// /models is also an authenticated API route, so a cached SPA response must
+	// never be reused for non-HTML requests sharing the same URL.
+	c.Header("Cache-Control", "no-store")
+	c.Header("Vary", "Accept")
+	c.Header("X-Accel-Expires", "0")
+}
+
+func applyHTMLCacheControl(c *gin.Context) {
+	if isModelMarketplaceRequest(c.Request) {
+		c.Header("Cache-Control", "no-store")
+		return
+	}
+	c.Header("Cache-Control", "no-cache")
 }
 
 func serveIndexHTML(c *gin.Context, fsys fs.FS) {

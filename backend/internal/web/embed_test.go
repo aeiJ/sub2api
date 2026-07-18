@@ -496,6 +496,9 @@ func TestFrontendServer_Middleware(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.Contains(t, w.Header().Get("Content-Type"), "text/html")
+		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+		assert.Equal(t, "Accept", w.Header().Get("Vary"))
+		assert.Equal(t, "0", w.Header().Get("X-Accel-Expires"))
 		assert.NotContains(t, w.Body.String(), "api handler")
 	})
 
