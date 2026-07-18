@@ -54,6 +54,15 @@ describe('AppSidebar admin navigation', () => {
   })
 })
 
+describe('AppSidebar logo navigation', () => {
+  it('navigates the logo to the public Home page', () => {
+    expect(componentSource).toContain('<router-link\n        to="/"')
+    expect(componentSource).toContain('class="sidebar-brand-title')
+    expect(componentSource).not.toContain('homePath')
+    expect(componentSource.match(/@click="handleMenuItemClick\('\/'\)"/g)).toHaveLength(2)
+  })
+})
+
 describe('AppSidebar header styles', () => {
   it('does not clip the version badge dropdown', () => {
     const sidebarHeaderBlockMatch = styleSource.match(/\.sidebar-header\s*\{[\s\S]*?\n {2}\}/)
