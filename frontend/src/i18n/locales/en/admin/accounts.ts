@@ -795,6 +795,11 @@ export default {
       loadFactorHint: 'Higher load factor increases scheduling frequency',
       priority: 'Priority',
       priorityHint: 'Lower value accounts are used first',
+      priorityDrain: {
+        ttftThreshold: 'Priority-drain TTFT threshold (seconds)',
+        ttftThresholdHint: '1-120 seconds. Changing this value resets this account\'s slow-result and cooldown state.',
+        restoreGlobalDefault: 'Restore global default'
+      },
       billingRateMultiplier: 'Billing Rate Multiplier',
       billingRateMultiplierHint: '0 = free, affects account billing only',
       expiresAt: 'Expires At',

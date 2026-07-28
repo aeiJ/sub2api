@@ -76,6 +76,7 @@ type AdminService interface {
 	// ListOpenAISchedulableAccountsForSchedulerScore 返回指定分组（nil 为未分组）内
 	// 可调度的 OpenAI 账号，用于按组计算调度分数。
 	ListOpenAISchedulableAccountsForSchedulerScore(ctx context.Context, groupID *int64) ([]Account, error)
+	GetOpenAIAccountSchedulerMetrics() OpenAIAccountSchedulerMetricsSnapshot
 	GetAccount(ctx context.Context, id int64) (*Account, error)
 	GetAccountsByIDs(ctx context.Context, ids []int64) ([]*Account, error)
 	CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error)
@@ -381,20 +382,22 @@ type UpdateAccountInput struct {
 
 // BulkUpdateAccountsInput describes the payload for bulk updating accounts.
 type BulkUpdateAccountsInput struct {
-	AccountIDs     []int64
-	Filters        *BulkUpdateAccountFilters
-	Name           string
-	ProxyID        *int64
-	Concurrency    *int
-	Priority       *int
-	RateMultiplier *float64 // 账号计费倍率（>=0，允许 0）
-	LoadFactor     *int
-	Status         string
-	Schedulable    *bool
-	GroupIDs       *[]int64
-	Credentials    map[string]any
-	Extra          map[string]any
-	ProbeEnabled   *bool
+	AccountIDs                              []int64
+	Filters                                 *BulkUpdateAccountFilters
+	Name                                    string
+	ProxyID                                 *int64
+	Concurrency                             *int
+	Priority                                *int
+	RateMultiplier                          *float64 // 账号计费倍率（>=0，允许 0）
+	LoadFactor                              *int
+	Status                                  string
+	Schedulable                             *bool
+	GroupIDs                                *[]int64
+	Credentials                             map[string]any
+	Extra                                   map[string]any
+	ProbeEnabled                            *bool
+	OpenAIPriorityDrainTTFTThresholdSeconds *int
+	ClearOpenAIPriorityDrainTTFTThreshold   bool
 	// SkipMixedChannelCheck skips the mixed channel risk check when binding groups.
 	// This should only be set when the caller has explicitly confirmed the risk.
 	SkipMixedChannelCheck bool
@@ -612,29 +615,33 @@ var ErrRPMStatusUnavailable = infraerrors.New(http.StatusNotImplemented, "RPM_ST
 
 // adminServiceImpl implements AdminService
 type adminServiceImpl struct {
-	userRepo             UserRepository
-	groupRepo            GroupRepository
-	groupDuplicateRepo   GroupDuplicateRepository
-	accountRepo          AccountRepository
-	accountDuplicateRepo AccountDuplicateRepository
-	proxyRepo            ProxyRepository
-	apiKeyRepo           APIKeyRepository
-	redeemCodeRepo       RedeemCodeRepository
-	userGroupRateRepo    UserGroupRateRepository
-	userRPMCache         UserRPMCache
-	billingCacheService  *BillingCacheService
-	proxyProber          ProxyExitInfoProber
-	proxyLatencyCache    ProxyLatencyCache
-	authCacheInvalidator APIKeyAuthCacheInvalidator
-	entClient            *dbent.Client // 用于开启数据库事务
-	settingService       *SettingService
-	defaultSubAssigner   DefaultSubscriptionAssigner
-	userSubRepo          UserSubscriptionRepository
-	privacyClientFactory PrivacyClientFactory
-	runtimeBlocker       AccountRuntimeBlocker
-	affiliateService     adminRechargeAffiliateAccruer
-	compositeRouteRepo   CompositeModelRouteRepository
-	compositeResolver    *CompositeRouteResolver
+	userRepo                      UserRepository
+	groupRepo                     GroupRepository
+	groupDuplicateRepo            GroupDuplicateRepository
+	accountRepo                   AccountRepository
+	accountDuplicateRepo          AccountDuplicateRepository
+	proxyRepo                     ProxyRepository
+	apiKeyRepo                    APIKeyRepository
+	redeemCodeRepo                RedeemCodeRepository
+	userGroupRateRepo             UserGroupRateRepository
+	userRPMCache                  UserRPMCache
+	billingCacheService           *BillingCacheService
+	proxyProber                   ProxyExitInfoProber
+	proxyLatencyCache             ProxyLatencyCache
+	authCacheInvalidator          APIKeyAuthCacheInvalidator
+	entClient                     *dbent.Client // 用于开启数据库事务
+	settingService                *SettingService
+	defaultSubAssigner            DefaultSubscriptionAssigner
+	userSubRepo                   UserSubscriptionRepository
+	privacyClientFactory          PrivacyClientFactory
+	runtimeBlocker                AccountRuntimeBlocker
+	affiliateService              adminRechargeAffiliateAccruer
+	compositeRouteRepo            CompositeModelRouteRepository
+	compositeResolver             *CompositeRouteResolver
+	openAIPriorityDrainStateStore OpenAIPriorityDrainTTFTStateStore
+	openAIMetricsProvider         interface {
+		SnapshotOpenAIAccountSchedulerMetrics() OpenAIAccountSchedulerMetricsSnapshot
+	}
 }
 
 type adminRechargeAffiliateAccruer interface {
@@ -643,6 +650,13 @@ type adminRechargeAffiliateAccruer interface {
 
 type userGroupRateBatchReader interface {
 	GetByUserIDs(ctx context.Context, userIDs []int64) (map[int64]map[int64]float64, error)
+}
+
+func (s *adminServiceImpl) GetOpenAIAccountSchedulerMetrics() OpenAIAccountSchedulerMetricsSnapshot {
+	if s == nil || s.openAIMetricsProvider == nil {
+		return OpenAIAccountSchedulerMetricsSnapshot{}
+	}
+	return s.openAIMetricsProvider.SnapshotOpenAIAccountSchedulerMetrics()
 }
 
 // NewAdminService creates a new AdminService
@@ -669,29 +683,43 @@ func NewAdminService(
 	compositeRouteRepo CompositeModelRouteRepository,
 	compositeResolver *CompositeRouteResolver,
 ) AdminService {
+	var priorityDrainStateStore OpenAIPriorityDrainTTFTStateStore
+	if provider, ok := runtimeBlocker.(interface {
+		OpenAIPriorityDrainTTFTStateStore() OpenAIPriorityDrainTTFTStateStore
+	}); ok {
+		priorityDrainStateStore = provider.OpenAIPriorityDrainTTFTStateStore()
+	}
+	if settingService != nil {
+		settingService.SetOpenAIPriorityDrainStateStore(priorityDrainStateStore)
+	}
+	metricsProvider, _ := runtimeBlocker.(interface {
+		SnapshotOpenAIAccountSchedulerMetrics() OpenAIAccountSchedulerMetricsSnapshot
+	})
 	return &adminServiceImpl{
-		userRepo:             userRepo,
-		groupRepo:            groupRepo,
-		groupDuplicateRepo:   groupRepo,
-		accountRepo:          accountRepo,
-		accountDuplicateRepo: accountRepo,
-		proxyRepo:            proxyRepo,
-		apiKeyRepo:           apiKeyRepo,
-		redeemCodeRepo:       redeemCodeRepo,
-		userGroupRateRepo:    userGroupRateRepo,
-		userRPMCache:         userRPMCache,
-		billingCacheService:  billingCacheService,
-		proxyProber:          proxyProber,
-		proxyLatencyCache:    proxyLatencyCache,
-		authCacheInvalidator: authCacheInvalidator,
-		entClient:            entClient,
-		settingService:       settingService,
-		defaultSubAssigner:   defaultSubAssigner,
-		userSubRepo:          userSubRepo,
-		privacyClientFactory: privacyClientFactory,
-		runtimeBlocker:       runtimeBlocker,
-		affiliateService:     affiliateService,
-		compositeRouteRepo:   compositeRouteRepo,
-		compositeResolver:    compositeResolver,
+		userRepo:                      userRepo,
+		groupRepo:                     groupRepo,
+		groupDuplicateRepo:            groupRepo,
+		accountRepo:                   accountRepo,
+		accountDuplicateRepo:          accountRepo,
+		proxyRepo:                     proxyRepo,
+		apiKeyRepo:                    apiKeyRepo,
+		redeemCodeRepo:                redeemCodeRepo,
+		userGroupRateRepo:             userGroupRateRepo,
+		userRPMCache:                  userRPMCache,
+		billingCacheService:           billingCacheService,
+		proxyProber:                   proxyProber,
+		proxyLatencyCache:             proxyLatencyCache,
+		authCacheInvalidator:          authCacheInvalidator,
+		entClient:                     entClient,
+		settingService:                settingService,
+		defaultSubAssigner:            defaultSubAssigner,
+		userSubRepo:                   userSubRepo,
+		privacyClientFactory:          privacyClientFactory,
+		runtimeBlocker:                runtimeBlocker,
+		affiliateService:              affiliateService,
+		compositeRouteRepo:            compositeRouteRepo,
+		compositeResolver:             compositeResolver,
+		openAIPriorityDrainStateStore: priorityDrainStateStore,
+		openAIMetricsProvider:         metricsProvider,
 	}
 }

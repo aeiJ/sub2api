@@ -445,6 +445,16 @@ type OpenAIGatewayService struct {
 	openaiCompatAnthropicDigestSessions sync.Map
 }
 
+// OpenAIPriorityDrainTTFTStateStore exposes the optional scheduler cache state
+// to administrative bulk edits so account-level threshold changes can start
+// accumulating from a clean slate.
+func (s *OpenAIGatewayService) OpenAIPriorityDrainTTFTStateStore() OpenAIPriorityDrainTTFTStateStore {
+	if s == nil || s.schedulerSnapshot == nil {
+		return nil
+	}
+	return s.schedulerSnapshot.OpenAIPriorityDrainTTFTStateStore()
+}
+
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
 func NewOpenAIGatewayService(
 	accountRepo AccountRepository,

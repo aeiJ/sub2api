@@ -514,6 +514,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	if _, exists := input.Extra[openAIPriorityDrainTTFTThresholdExtraKey]; exists {
+		return nil, infraerrors.BadRequest("OPENAI_PRIORITY_DRAIN_TTFT_THRESHOLD_DIRECT_EXTRA_UNSUPPORTED", "set the OpenAI priority-drain TTFT threshold with its dedicated bulk field")
+	}
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
 		return nil, err
@@ -805,7 +808,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			}
 		}
 	}
-
+	if _, exists := input.Extra[openAIPriorityDrainTTFTThresholdExtraKey]; exists {
+		return nil, infraerrors.BadRequest("OPENAI_PRIORITY_DRAIN_TTFT_THRESHOLD_DIRECT_EXTRA_UNSUPPORTED", "set the OpenAI priority-drain TTFT threshold with its dedicated bulk field")
+	}
 	probeEnabledAppliedAtomically := false
 	if requestedProbeEnabledUpdate != nil && isUpstreamBillingProbeAccount(account) {
 		if updater, ok := s.accountRepo.(accountProbeEnabledAtomicUpdater); ok {
@@ -854,6 +859,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键
 // （如 model_rate_limits / passive_usage_* 等）。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	if _, exists := updates[openAIPriorityDrainTTFTThresholdExtraKey]; exists {
+		return infraerrors.BadRequest("OPENAI_PRIORITY_DRAIN_TTFT_THRESHOLD_DIRECT_EXTRA_UNSUPPORTED", "set the OpenAI priority-drain TTFT threshold with its dedicated bulk field")
+	}
 	delete(updates, OllamaCloudUsageSessionExtraKey)
 	delete(updates, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(updates, OllamaCloudUsageSnapshotExtraKey)
@@ -881,6 +889,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	delete(input.Extra, OllamaCloudUsageSessionExtraKey)
 	delete(input.Extra, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(input.Extra, OllamaCloudUsageSnapshotExtraKey)
+	if _, exists := input.Extra[openAIPriorityDrainTTFTThresholdExtraKey]; exists {
+		return nil, infraerrors.BadRequest("OPENAI_PRIORITY_DRAIN_TTFT_THRESHOLD_DIRECT_EXTRA_UNSUPPORTED", "set the OpenAI priority-drain TTFT threshold with its dedicated bulk field")
+	}
 
 	if len(input.AccountIDs) == 0 && input.Filters != nil {
 		accountIDs, err := s.resolveBulkUpdateTargetIDs(ctx, input.Filters)
@@ -907,15 +918,42 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	needMixedChannelCheck := input.GroupIDs != nil && !input.SkipMixedChannelCheck
 	_, hasLongContextBillingUpdate := input.Extra[openAILongContextBillingEnabledKey]
+	hasPriorityDrainTTFTUpdate := input.OpenAIPriorityDrainTTFTThresholdSeconds != nil || input.ClearOpenAIPriorityDrainTTFTThreshold
+	if input.OpenAIPriorityDrainTTFTThresholdSeconds != nil && input.ClearOpenAIPriorityDrainTTFTThreshold {
+		return nil, infraerrors.BadRequest("OPENAI_PRIORITY_DRAIN_TTFT_THRESHOLD_CONFLICT", "set or clear the OpenAI priority-drain TTFT threshold, not both")
+	}
+	if input.OpenAIPriorityDrainTTFTThresholdSeconds != nil {
+		threshold := *input.OpenAIPriorityDrainTTFTThresholdSeconds
+		if threshold < 1 || threshold > 120 {
+			return nil, infraerrors.BadRequest("INVALID_OPENAI_PRIORITY_DRAIN_TTFT_THRESHOLD", "OpenAI priority-drain TTFT threshold must be between 1 and 120 seconds")
+		}
+	}
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasLongContextBillingUpdate || input.ProbeEnabled != nil {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasLongContextBillingUpdate || input.ProbeEnabled != nil || hasPriorityDrainTTFTUpdate {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
 		}
 		cachedTargets = loaded
+	}
+	if hasPriorityDrainTTFTUpdate {
+		targetsByID := make(map[int64]*Account, len(cachedTargets))
+		for _, account := range cachedTargets {
+			if account != nil {
+				targetsByID[account.ID] = account
+			}
+		}
+		for _, accountID := range input.AccountIDs {
+			account, ok := targetsByID[accountID]
+			if !ok {
+				return nil, ErrAccountNotFound
+			}
+			if !account.IsOpenAIApiKey() {
+				return nil, infraerrors.BadRequest("OPENAI_PRIORITY_DRAIN_TTFT_THRESHOLD_TARGET_INVALID", "priority-drain TTFT threshold can only be changed for OpenAI API Key accounts")
+			}
+		}
 	}
 	if input.ProbeEnabled != nil {
 		targetsByID := make(map[int64]*Account, len(cachedTargets))
@@ -978,7 +1016,6 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			}
 		}
 	}
-
 	// 预检查混合渠道风险：在任何写操作之前，若发现风险立即返回错误。
 	if needMixedChannelCheck {
 		for _, accountID := range input.AccountIDs {
@@ -1008,6 +1045,15 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		Credentials:  input.Credentials,
 		Extra:        input.Extra,
 		ProbeEnabled: input.ProbeEnabled,
+	}
+	if input.OpenAIPriorityDrainTTFTThresholdSeconds != nil {
+		if repoUpdates.Extra == nil {
+			repoUpdates.Extra = make(map[string]any)
+		}
+		repoUpdates.Extra[openAIPriorityDrainTTFTThresholdExtraKey] = *input.OpenAIPriorityDrainTTFTThresholdSeconds
+	}
+	if input.ClearOpenAIPriorityDrainTTFTThreshold {
+		repoUpdates.ClearExtraKeys = append(repoUpdates.ClearExtraKeys, openAIPriorityDrainTTFTThresholdExtraKey)
 	}
 	if input.ProbeEnabled != nil {
 		if repoUpdates.Extra == nil {
@@ -1057,6 +1103,22 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// Run bulk update for column/jsonb fields first.
 	if _, err := s.accountRepo.BulkUpdate(ctx, input.AccountIDs, repoUpdates); err != nil {
 		return nil, err
+	}
+	if hasPriorityDrainTTFTUpdate && s.openAIPriorityDrainStateStore != nil {
+		accountPolicy := "default"
+		if input.OpenAIPriorityDrainTTFTThresholdSeconds != nil {
+			accountPolicy = "threshold=" + strconv.Itoa(*input.OpenAIPriorityDrainTTFTThresholdSeconds)
+		}
+		accountPolicies := make(map[int64]string, len(input.AccountIDs))
+		for _, accountID := range input.AccountIDs {
+			accountPolicies[accountID] = accountPolicy
+		}
+		if err := s.openAIPriorityDrainStateStore.FenceOpenAIPriorityDrainTTFTAccountPolicies(ctx, accountPolicies); err != nil {
+			slog.Warn("openai_priority_drain_ttft_account_policy_fence_failed", "account_ids", input.AccountIDs, "error", err)
+		}
+		if err := s.openAIPriorityDrainStateStore.ClearOpenAIPriorityDrainTTFTStates(ctx, input.AccountIDs); err != nil {
+			slog.Warn("openai_priority_drain_ttft_state_clear_failed", "account_ids", input.AccountIDs, "error", err)
+		}
 	}
 
 	// 将 proxy 变更传播到每个目标账号的 spark 影子账号

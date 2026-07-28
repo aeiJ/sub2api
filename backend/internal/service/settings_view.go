@@ -228,6 +228,11 @@ type SystemSettings struct {
 	OpenAIAdvancedSchedulerEnabled                         bool
 	OpenAIAdvancedSchedulerStickyWeightedEnabled           bool
 	OpenAIAdvancedSchedulerSubscriptionPriorityEnabled     bool
+	OpenAIPriorityDrainEnabled                             bool
+	OpenAIPriorityDrainTTFTThresholdSeconds                int
+	OpenAIPriorityDrainConsecutiveSlowCount                int
+	OpenAIPriorityDrainStatisticsWindowSeconds             int
+	OpenAIPriorityDrainSoftCooldownSeconds                 int
 	OpenAIAdvancedSchedulerLBTopK                          string
 	OpenAIAdvancedSchedulerWeightPriority                  string
 	OpenAIAdvancedSchedulerWeightLoad                      string

@@ -464,6 +464,21 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled != after.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled {
 		changed = append(changed, "openai_advanced_scheduler_subscription_priority_enabled")
 	}
+	if before.OpenAIPriorityDrainEnabled != after.OpenAIPriorityDrainEnabled {
+		changed = append(changed, "openai_priority_drain_enabled")
+	}
+	if before.OpenAIPriorityDrainTTFTThresholdSeconds != after.OpenAIPriorityDrainTTFTThresholdSeconds {
+		changed = append(changed, "openai_priority_drain_ttft_threshold_seconds")
+	}
+	if before.OpenAIPriorityDrainConsecutiveSlowCount != after.OpenAIPriorityDrainConsecutiveSlowCount {
+		changed = append(changed, "openai_priority_drain_consecutive_slow_count")
+	}
+	if before.OpenAIPriorityDrainStatisticsWindowSeconds != after.OpenAIPriorityDrainStatisticsWindowSeconds {
+		changed = append(changed, "openai_priority_drain_statistics_window_seconds")
+	}
+	if before.OpenAIPriorityDrainSoftCooldownSeconds != after.OpenAIPriorityDrainSoftCooldownSeconds {
+		changed = append(changed, "openai_priority_drain_soft_cooldown_seconds")
+	}
 	if before.OpenAIAdvancedSchedulerLBTopK != after.OpenAIAdvancedSchedulerLBTopK {
 		changed = append(changed, "openai_advanced_scheduler_lb_top_k")
 	}

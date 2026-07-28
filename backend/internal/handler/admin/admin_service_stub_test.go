@@ -18,6 +18,7 @@ type stubAdminService struct {
 	openAISchedulerScorePoolAccounts    []service.Account
 	schedulerScoreFilterCalls           int
 	openAISchedulerScorePoolCalls       int
+	openAIAccountSchedulerMetrics       service.OpenAIAccountSchedulerMetricsSnapshot
 	proxies                             []service.Proxy
 	proxyCounts                         []service.ProxyWithAccountCount
 	redeems                             []service.RedeemCode
@@ -460,6 +461,10 @@ func (s *stubAdminService) ListOpenAISchedulableAccountsForSchedulerScore(_ cont
 		}
 	}
 	return out, nil
+}
+
+func (s *stubAdminService) GetOpenAIAccountSchedulerMetrics() service.OpenAIAccountSchedulerMetricsSnapshot {
+	return s.openAIAccountSchedulerMetrics
 }
 
 func (s *stubAdminService) GetAccount(ctx context.Context, id int64) (*service.Account, error) {

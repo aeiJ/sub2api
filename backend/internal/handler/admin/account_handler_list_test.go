@@ -52,6 +52,37 @@ func TestAccountHandlerListIncludesCreatedAt(t *testing.T) {
 	require.Equal(t, 0, offset)
 }
 
+func TestAccountHandlerExposesOpenAIAccountSchedulerMetrics(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	adminSvc := newStubAdminService()
+	adminSvc.openAIAccountSchedulerMetrics = service.OpenAIAccountSchedulerMetricsSnapshot{
+		SelectTotal: 9,
+		PriorityDrain: service.OpenAIPriorityDrainMetricsSnapshot{
+			RedisFallbackTotal: 2,
+		},
+	}
+	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router.GET("/api/v1/admin/accounts/openai-priority-drain/metrics", handler.GetOpenAIAccountSchedulerMetrics)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/openai-priority-drain/metrics", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var payload struct {
+		Data struct {
+			SelectTotal   int64 `json:"select_total"`
+			PriorityDrain struct {
+				RedisFallbackTotal int64 `json:"redis_fallback_total"`
+			} `json:"priority_drain"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Equal(t, int64(9), payload.Data.SelectTotal)
+	require.Equal(t, int64(2), payload.Data.PriorityDrain.RedisFallbackTotal)
+}
+
 func TestAccountHandlerListReturnsSchedulerScoresPerGroup(t *testing.T) {
 	router, adminSvc := setupAccountListRouter()
 	now := time.Now().UTC()

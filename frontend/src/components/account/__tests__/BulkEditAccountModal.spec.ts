@@ -343,6 +343,56 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
+  it('OpenAI API Key 批量编辑可设置优先额度消耗 TTFT 阈值', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['apikey']
+    })
+
+    await wrapper.get('#bulk-edit-openai-priority-drain-ttft-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-openai-priority-drain-ttft').setValue(10)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      openai_priority_drain_ttft_threshold_seconds: 10
+    })
+  })
+
+  it('OpenAI API Key 批量编辑可恢复优先额度消耗 TTFT 阈值的全局默认值', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['apikey']
+    })
+
+    await wrapper.get('#bulk-edit-openai-priority-drain-ttft-enabled').setValue(true)
+    const restoreGlobalDefault = wrapper
+      .findAll('label')
+      .find((label) => label.text().includes('admin.accounts.priorityDrain.restoreGlobalDefault'))
+    expect(restoreGlobalDefault).toBeDefined()
+    await restoreGlobalDefault!.find('input').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      clear_openai_priority_drain_ttft_threshold: true
+    })
+  })
+
+  it('优先额度消耗 TTFT 阈值仅对纯 OpenAI API Key 目标显示', () => {
+    const oauthOnly = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['oauth']
+    })
+    const mixedOpenAI = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['apikey', 'oauth']
+    })
+
+    expect(oauthOnly.find('#bulk-edit-openai-priority-drain-ttft-enabled').exists()).toBe(false)
+    expect(mixedOpenAI.find('#bulk-edit-openai-priority-drain-ttft-enabled').exists()).toBe(false)
+  })
+
   it('OpenAI API Key 批量编辑可统一开启上游倍率自动探测', async () => {
     const wrapper = mountModal({
       selectedPlatforms: ['openai'],

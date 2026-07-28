@@ -2786,7 +2786,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 				" AND "+ollamaCloudBaseURLMatchesSQL(credentialPlaceholder+"::jsonb ->> 'base_url'")+")")
 	}
 
-	if len(updates.Extra) > 0 || len(ollamaGroupIdentityChanges) > 0 || ollamaProxyIdentityChanged != "" {
+	if len(updates.Extra) > 0 || len(updates.ClearExtraKeys) > 0 || len(ollamaGroupIdentityChanges) > 0 || ollamaProxyIdentityChanged != "" {
 		extraExpression := "COALESCE(extra, '{}'::jsonb)"
 		if len(updates.Extra) > 0 {
 			payload, err := json.Marshal(updates.Extra)
@@ -2802,6 +2802,14 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			if ollamaCloudUsageSnapshotClearRequested(updates.Extra) {
 				extraExpression = "(" + extraExpression + ") - 'ollama_cloud_usage_snapshot'"
 			}
+		}
+		for _, key := range updates.ClearExtraKeys {
+			if key == "" {
+				continue
+			}
+			extraExpression = "(" + extraExpression + ") - $" + itoa(idx)
+			args = append(args, key)
+			idx++
 		}
 		eligibleAccount := "platform IN ('openai', 'anthropic') AND type = 'apikey'"
 		groupIdentityChanged := ""

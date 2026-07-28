@@ -152,21 +152,23 @@ type UpdateAccountRequest struct {
 
 // BulkUpdateAccountsRequest represents the payload for bulk editing accounts
 type BulkUpdateAccountsRequest struct {
-	AccountIDs              []int64                   `json:"account_ids"`
-	Filters                 *BulkUpdateAccountFilters `json:"filters"`
-	Name                    string                    `json:"name"`
-	ProxyID                 *int64                    `json:"proxy_id"`
-	Concurrency             *int                      `json:"concurrency"`
-	Priority                *int                      `json:"priority"`
-	RateMultiplier          *float64                  `json:"rate_multiplier"`
-	LoadFactor              *int                      `json:"load_factor"`
-	Status                  string                    `json:"status" binding:"omitempty,oneof=active inactive error"`
-	Schedulable             *bool                     `json:"schedulable"`
-	GroupIDs                *[]int64                  `json:"group_ids"`
-	Credentials             map[string]any            `json:"credentials"`
-	Extra                   map[string]any            `json:"extra"`
-	ProbeEnabled            *bool                     `json:"upstream_billing_probe_enabled"`
-	ConfirmMixedChannelRisk *bool                     `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
+	AccountIDs                              []int64                   `json:"account_ids"`
+	Filters                                 *BulkUpdateAccountFilters `json:"filters"`
+	Name                                    string                    `json:"name"`
+	ProxyID                                 *int64                    `json:"proxy_id"`
+	Concurrency                             *int                      `json:"concurrency"`
+	Priority                                *int                      `json:"priority"`
+	RateMultiplier                          *float64                  `json:"rate_multiplier"`
+	LoadFactor                              *int                      `json:"load_factor"`
+	Status                                  string                    `json:"status" binding:"omitempty,oneof=active inactive error"`
+	Schedulable                             *bool                     `json:"schedulable"`
+	GroupIDs                                *[]int64                  `json:"group_ids"`
+	Credentials                             map[string]any            `json:"credentials"`
+	Extra                                   map[string]any            `json:"extra"`
+	ProbeEnabled                            *bool                     `json:"upstream_billing_probe_enabled"`
+	OpenAIPriorityDrainTTFTThresholdSeconds *int                      `json:"openai_priority_drain_ttft_threshold_seconds"`
+	ClearOpenAIPriorityDrainTTFTThreshold   bool                      `json:"clear_openai_priority_drain_ttft_threshold"`
+	ConfirmMixedChannelRisk                 *bool                     `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
 }
 
 type BulkUpdateAccountFilters struct {
@@ -692,6 +694,12 @@ func (h *AccountHandler) List(c *gin.Context) {
 	}
 
 	response.Paginated(c, result, total, page, pageSize)
+}
+
+// GetOpenAIAccountSchedulerMetrics exposes the current process scheduler
+// counters for administrator diagnostics.
+func (h *AccountHandler) GetOpenAIAccountSchedulerMetrics(c *gin.Context) {
+	response.Success(c, h.adminService.GetOpenAIAccountSchedulerMetrics())
 }
 
 func buildAccountsListETag(
@@ -1940,7 +1948,9 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		req.GroupIDs != nil ||
 		len(req.Credentials) > 0 ||
 		len(req.Extra) > 0 ||
-		req.ProbeEnabled != nil
+		req.ProbeEnabled != nil ||
+		req.OpenAIPriorityDrainTTFTThresholdSeconds != nil ||
+		req.ClearOpenAIPriorityDrainTTFTThreshold
 
 	if !hasUpdates {
 		response.BadRequest(c, "No updates provided")
@@ -1948,21 +1958,23 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 	}
 
 	result, err := h.adminService.BulkUpdateAccounts(c.Request.Context(), &service.BulkUpdateAccountsInput{
-		AccountIDs:            req.AccountIDs,
-		Filters:               toServiceBulkUpdateAccountFilters(req.Filters),
-		Name:                  req.Name,
-		ProxyID:               req.ProxyID,
-		Concurrency:           req.Concurrency,
-		Priority:              req.Priority,
-		RateMultiplier:        req.RateMultiplier,
-		LoadFactor:            req.LoadFactor,
-		Status:                req.Status,
-		Schedulable:           req.Schedulable,
-		GroupIDs:              req.GroupIDs,
-		Credentials:           req.Credentials,
-		Extra:                 req.Extra,
-		ProbeEnabled:          req.ProbeEnabled,
-		SkipMixedChannelCheck: skipCheck,
+		AccountIDs:                              req.AccountIDs,
+		Filters:                                 toServiceBulkUpdateAccountFilters(req.Filters),
+		Name:                                    req.Name,
+		ProxyID:                                 req.ProxyID,
+		Concurrency:                             req.Concurrency,
+		Priority:                                req.Priority,
+		RateMultiplier:                          req.RateMultiplier,
+		LoadFactor:                              req.LoadFactor,
+		Status:                                  req.Status,
+		Schedulable:                             req.Schedulable,
+		GroupIDs:                                req.GroupIDs,
+		Credentials:                             req.Credentials,
+		Extra:                                   req.Extra,
+		ProbeEnabled:                            req.ProbeEnabled,
+		OpenAIPriorityDrainTTFTThresholdSeconds: req.OpenAIPriorityDrainTTFTThresholdSeconds,
+		ClearOpenAIPriorityDrainTTFTThreshold:   req.ClearOpenAIPriorityDrainTTFTThreshold,
+		SkipMixedChannelCheck:                   skipCheck,
 	})
 	if err != nil {
 		var mixedErr *service.MixedChannelError

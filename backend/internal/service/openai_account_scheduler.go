@@ -47,6 +47,11 @@ type cachedOpenAIAdvancedSchedulerSetting struct {
 	enabled                        bool
 	stickyWeightedEnabled          bool
 	subscriptionPriorityEnabled    bool
+	priorityDrainEnabled           bool
+	priorityDrainTTFTThreshold     int
+	priorityDrainSlowCount         int
+	priorityDrainWindow            time.Duration
+	priorityDrainCooldown          time.Duration
 	lbTopKOverride                 int
 	weightOverrides                map[string]float64
 	expiresAt                      int64
@@ -58,6 +63,11 @@ type openAIAdvancedSchedulerRuntimeSettings struct {
 	enabled                        bool
 	stickyWeightedEnabled          bool
 	subscriptionPriorityEnabled    bool
+	priorityDrainEnabled           bool
+	priorityDrainTTFTThreshold     int
+	priorityDrainSlowCount         int
+	priorityDrainWindow            time.Duration
+	priorityDrainCooldown          time.Duration
 	lbTopKOverride                 int
 	weightOverrides                map[string]float64
 }
@@ -98,17 +108,18 @@ type OpenAIAccountScheduleDecision struct {
 }
 
 type OpenAIAccountSchedulerMetricsSnapshot struct {
-	SelectTotal              int64
-	StickyPreviousHitTotal   int64
-	StickySessionHitTotal    int64
-	LoadBalanceSelectTotal   int64
-	AccountSwitchTotal       int64
-	SchedulerLatencyMsTotal  int64
-	SchedulerLatencyMsAvg    float64
-	StickyHitRatio           float64
-	AccountSwitchRate        float64
-	LoadSkewAvg              float64
-	RuntimeStatsAccountCount int
+	SelectTotal              int64                              `json:"select_total"`
+	StickyPreviousHitTotal   int64                              `json:"sticky_previous_hit_total"`
+	StickySessionHitTotal    int64                              `json:"sticky_session_hit_total"`
+	LoadBalanceSelectTotal   int64                              `json:"load_balance_select_total"`
+	AccountSwitchTotal       int64                              `json:"account_switch_total"`
+	SchedulerLatencyMsTotal  int64                              `json:"scheduler_latency_ms_total"`
+	SchedulerLatencyMsAvg    float64                            `json:"scheduler_latency_ms_avg"`
+	StickyHitRatio           float64                            `json:"sticky_hit_ratio"`
+	AccountSwitchRate        float64                            `json:"account_switch_rate"`
+	LoadSkewAvg              float64                            `json:"load_skew_avg"`
+	RuntimeStatsAccountCount int                                `json:"runtime_stats_account_count"`
+	PriorityDrain            OpenAIPriorityDrainMetricsSnapshot `json:"priority_drain"`
 }
 
 type OpenAIAccountScheduler interface {
@@ -283,9 +294,10 @@ func (s *openAIAccountRuntimeStats) size() int {
 }
 
 type defaultOpenAIAccountScheduler struct {
-	service *OpenAIGatewayService
-	metrics openAIAccountSchedulerMetrics
-	stats   *openAIAccountRuntimeStats
+	service           *OpenAIGatewayService
+	metrics           openAIAccountSchedulerMetrics
+	stats             *openAIAccountRuntimeStats
+	priorityDrainHook *OpenAIAccountOrderingHook
 }
 
 type openAISelectionProbeBudget struct {
@@ -359,9 +371,14 @@ func newDefaultOpenAIAccountScheduler(service *OpenAIGatewayService, stats *open
 	if stats == nil {
 		stats = newOpenAIAccountRuntimeStats()
 	}
+	var snapshot *SchedulerSnapshotService
+	if service != nil {
+		snapshot = service.schedulerSnapshot
+	}
 	return &defaultOpenAIAccountScheduler{
-		service: service,
-		stats:   stats,
+		service:           service,
+		stats:             stats,
+		priorityDrainHook: NewOpenAIAccountOrderingHook(snapshot),
 	}
 }
 
@@ -392,7 +409,7 @@ func (s *defaultOpenAIAccountScheduler) Select(
 			return nil, decision, err
 		}
 		if selection != nil && selection.Account != nil {
-			if !s.isAccountTransportCompatible(selection.Account, req.RequiredTransport) {
+			if !s.isAccountTransportCompatible(selection.Account, req.RequiredTransport) || !s.isAccountRequestCompatible(ctx, selection.Account, req) {
 				if selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}
@@ -1106,6 +1123,16 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 	selectionOrder []openAIAccountCandidateScore,
 	budget *openAISelectionProbeBudget,
 ) (*AccountSelectionResult, bool, error) {
+	return s.tryAcquireOpenAISelectionOrderWithBudgetAndPriorityDrainTrace(ctx, req, selectionOrder, budget, nil)
+}
+
+func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudgetAndPriorityDrainTrace(
+	ctx context.Context,
+	req OpenAIAccountScheduleRequest,
+	selectionOrder []openAIAccountCandidateScore,
+	budget *openAISelectionProbeBudget,
+	priorityDrainTrace *openAIPriorityDrainAttemptTrace,
+) (*AccountSelectionResult, bool, error) {
 	compactBlocked := false
 	release := func(result *AcquireResult) {
 		if result != nil && result.ReleaseFunc != nil {
@@ -1119,6 +1146,9 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 		}
 		if candidate.loadKnown && candidate.account.Concurrency > 0 &&
 			candidate.loadInfo.CurrentConcurrency >= candidate.account.Concurrency {
+			if priorityDrainTrace != nil && isOpenAIPriorityDrainOAuthLike(candidate.account) {
+				priorityDrainTrace.oauthSlotFull = true
+			}
 			continue
 		}
 
@@ -1130,11 +1160,17 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 			return nil, compactBlocked, acquireErr
 		}
 		if result == nil || !result.Acquired {
+			if priorityDrainTrace != nil && isOpenAIPriorityDrainOAuthLike(candidate.account) {
+				priorityDrainTrace.oauthSlotFull = true
+			}
 			continue
 		}
 
 		fresh := s.service.resolveFreshSchedulableOpenAIAccount(ctx, candidate.account, req.Platform, req.RequestedModel, false, req.RequiredCapability)
 		if fresh == nil || !s.isAccountTransportCompatible(fresh, req.RequiredTransport) || !s.isAccountRequestCompatible(ctx, fresh, req) {
+			if priorityDrainTrace != nil && isOpenAIPriorityDrainOAuthLike(candidate.account) {
+				priorityDrainTrace.oauthUnschedulable = true
+			}
 			release(result)
 			continue
 		}
@@ -1144,6 +1180,9 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 		}
 		fresh = s.service.recheckSelectedOpenAIAccountFromDB(ctx, fresh, req.GroupID, req.Platform, req.RequestedModel, false, req.RequiredCapability)
 		if fresh == nil || !s.isAccountTransportCompatible(fresh, req.RequiredTransport) || !s.isAccountRequestCompatible(ctx, fresh, req) {
+			if priorityDrainTrace != nil && isOpenAIPriorityDrainOAuthLike(candidate.account) {
+				priorityDrainTrace.oauthUnschedulable = true
+			}
 			release(result)
 			continue
 		}
@@ -1163,6 +1202,9 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 				return nil, compactBlocked, acquireErr
 			}
 			if result == nil || !result.Acquired {
+				if priorityDrainTrace != nil && isOpenAIPriorityDrainOAuthLike(fresh) {
+					priorityDrainTrace.oauthSlotFull = true
+				}
 				continue
 			}
 		}
@@ -1432,6 +1474,17 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		}
 	}
 
+	if s.service.openAIPriorityDrainSettings(ctx).enabled && normalizeOpenAICompatiblePlatform(req.Platform) == PlatformOpenAI {
+		attempt := s.trySelectByLoadBalancePool(ctx, req, filtered, loadMap, budget)
+		if attempt.err != nil {
+			return nil, attempt.candidateCount, attempt.topK, attempt.loadSkew, attempt.err
+		}
+		if attempt.result != nil {
+			return attempt.result, attempt.candidateCount, attempt.topK, attempt.loadSkew, nil
+		}
+		return s.finishLoadBalanceSelectionFallback(ctx, req, attempt, budget, filterStats)
+	}
+
 	attempt := s.trySelectByLoadBalancePool(ctx, req, filtered, loadMap, budget)
 	if attempt.err != nil {
 		return nil, attempt.candidateCount, attempt.topK, attempt.loadSkew, attempt.err
@@ -1463,6 +1516,11 @@ func (s *defaultOpenAIAccountScheduler) trySelectByLoadBalancePool(
 	budget *openAISelectionProbeBudget,
 ) openAIAccountLoadSelectionAttempt {
 	plan := s.buildOpenAIAccountLoadPlan(ctx, req, filtered, loadMap)
+	priorityDrainApplied := s.applyOpenAIPriorityDrainOrdering(ctx, req, &plan)
+	var priorityDrainTrace *openAIPriorityDrainAttemptTrace
+	if priorityDrainApplied {
+		priorityDrainTrace = &openAIPriorityDrainAttemptTrace{}
+	}
 	if openAICostOverflowExpanded(req, plan) {
 		budget.enableLimit()
 	}
@@ -1487,13 +1545,16 @@ func (s *defaultOpenAIAccountScheduler) trySelectByLoadBalancePool(
 		return attempt
 	}
 
-	result, compactBlocked, acquireErr := s.tryAcquireOpenAISelectionOrderWithBudget(ctx, req, attempt.selectionOrder, budget)
+	result, compactBlocked, acquireErr := s.tryAcquireOpenAISelectionOrderWithBudgetAndPriorityDrainTrace(ctx, req, attempt.selectionOrder, budget, priorityDrainTrace)
 	attempt.compactBlocked = compactBlocked
 	if acquireErr != nil {
 		attempt.err = acquireErr
 		return attempt
 	}
 	if result != nil {
+		if priorityDrainApplied {
+			s.priorityDrainHook.RecordSelection(attempt.selectionOrder, result.Account, priorityDrainTrace)
+		}
 		attempt.result = result
 		return attempt
 	}
@@ -1502,16 +1563,24 @@ func (s *defaultOpenAIAccountScheduler) trySelectByLoadBalancePool(
 		loadReq := buildOpenAIAccountLoadRequest(filtered)
 		if freshLoadMap, loadErr := s.service.concurrencyService.GetAccountsLoadBatchFresh(ctx, loadReq); loadErr == nil {
 			freshPlan := s.buildOpenAIAccountLoadPlan(ctx, req, filtered, freshLoadMap)
+			freshPriorityDrainApplied := s.applyOpenAIPriorityDrainOrdering(ctx, req, &freshPlan)
+			freshPriorityDrainTrace := priorityDrainTrace
+			if freshPriorityDrainApplied && freshPriorityDrainTrace == nil {
+				freshPriorityDrainTrace = &openAIPriorityDrainAttemptTrace{}
+			}
 			if openAICostOverflowExpanded(req, freshPlan) {
 				budget.enableLimit()
 			}
 			if len(freshPlan.selectionOrder) > 0 {
-				freshResult, freshCompactBlocked, freshAcquireErr := s.tryAcquireOpenAISelectionOrderWithBudget(ctx, req, freshPlan.selectionOrder, budget)
+				freshResult, freshCompactBlocked, freshAcquireErr := s.tryAcquireOpenAISelectionOrderWithBudgetAndPriorityDrainTrace(ctx, req, freshPlan.selectionOrder, budget, freshPriorityDrainTrace)
 				if freshAcquireErr != nil {
 					attempt.err = freshAcquireErr
 					return attempt
 				}
 				if freshResult != nil {
+					if freshPriorityDrainApplied {
+						s.priorityDrainHook.RecordSelection(freshPlan.selectionOrder, freshResult.Account, freshPriorityDrainTrace)
+					}
 					attempt.result = freshResult
 					attempt.selectionOrder = freshPlan.selectionOrder
 					attempt.candidateCount = freshPlan.candidateCount
@@ -1548,6 +1617,29 @@ func openAICostOverflowExpanded(req OpenAIAccountScheduleRequest, plan openAIAcc
 		}
 	}
 	return supported > plan.topK || unknown > plan.topK
+}
+
+func (s *defaultOpenAIAccountScheduler) applyOpenAIPriorityDrainOrdering(
+	ctx context.Context,
+	req OpenAIAccountScheduleRequest,
+	plan *openAIAccountLoadPlan,
+) bool {
+	if s == nil || s.service == nil || s.priorityDrainHook == nil || plan == nil {
+		return false
+	}
+	combined := make([]openAIAccountCandidateScore, 0, len(plan.candidates)+len(plan.staleSnapshotCompactRetry))
+	combined = append(combined, plan.candidates...)
+	combined = append(combined, plan.staleSnapshotCompactRetry...)
+	settings := s.service.openAIPriorityDrainSettings(ctx)
+	order, applied := s.priorityDrainHook.Order(ctx, req, combined, settings)
+	if !applied {
+		return false
+	}
+	plan.selectionOrder = order
+	plan.topK = len(order)
+	plan.candidateCount = len(order)
+	plan.includeOverflowFallback = false
+	return true
 }
 
 func buildOpenAIAccountLoadRequest(accounts []*Account) []AccountWithConcurrency {
@@ -1675,6 +1767,10 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if account == nil {
 		return false, "account_nil"
 	}
+	if s != nil && s.service != nil && s.service.openAIPriorityDrainSettings(ctx).enabled &&
+		(isOpenAIPriorityDrainOAuthLike(account) || account.IsOpenAIApiKey()) && !openAIPriorityDrainAccountIsGrouped(account) {
+		return false, "priority_drain_ungrouped"
+	}
 	if s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel) {
 		return false, "runtime_blocked"
 	}
@@ -1719,6 +1815,26 @@ func (s *defaultOpenAIAccountScheduler) ReportResult(accountID int64, success bo
 		return
 	}
 	s.stats.report(accountID, success, firstTokenMs)
+	if s.priorityDrainHook == nil || s.service == nil {
+		return
+	}
+	settings := s.service.openAIPriorityDrainSettings(context.Background())
+	if !settings.enabled || !success || firstTokenMs == nil {
+		return
+	}
+	lookupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var account *Account
+	var err error
+	if s.service.schedulerSnapshot != nil {
+		account, err = s.service.schedulerSnapshot.GetAccount(lookupCtx, accountID)
+	} else if s.service.accountRepo != nil {
+		account, err = s.service.accountRepo.GetByID(lookupCtx, accountID)
+	}
+	if err != nil || account == nil {
+		return
+	}
+	s.priorityDrainHook.ObserveTTFT(lookupCtx, account, success, firstTokenMs, settings)
 }
 
 func (s *defaultOpenAIAccountScheduler) ReportSwitch() {
@@ -1749,6 +1865,9 @@ func (s *defaultOpenAIAccountScheduler) SnapshotMetrics() OpenAIAccountScheduler
 		SchedulerLatencyMsTotal:  latencyTotal,
 		RuntimeStatsAccountCount: s.stats.size(),
 	}
+	if s.priorityDrainHook != nil {
+		snapshot.PriorityDrain = s.priorityDrainHook.SnapshotMetrics()
+	}
 	if selectTotal > 0 {
 		snapshot.SchedulerLatencyMsAvg = float64(latencyTotal) / float64(selectTotal)
 		snapshot.StickyHitRatio = float64(prevHit+sessionHit) / float64(selectTotal)
@@ -1774,6 +1893,11 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 				enabled:                        cached.enabled,
 				stickyWeightedEnabled:          cached.stickyWeightedEnabled,
 				subscriptionPriorityEnabled:    cached.subscriptionPriorityEnabled,
+				priorityDrainEnabled:           cached.priorityDrainEnabled,
+				priorityDrainTTFTThreshold:     cached.priorityDrainTTFTThreshold,
+				priorityDrainSlowCount:         cached.priorityDrainSlowCount,
+				priorityDrainWindow:            cached.priorityDrainWindow,
+				priorityDrainCooldown:          cached.priorityDrainCooldown,
 				lbTopKOverride:                 cached.lbTopKOverride,
 				weightOverrides:                cloneOpenAIAdvancedSchedulerWeightOverrides(cached.weightOverrides),
 			}
@@ -1789,6 +1913,11 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 					enabled:                        cached.enabled,
 					stickyWeightedEnabled:          cached.stickyWeightedEnabled,
 					subscriptionPriorityEnabled:    cached.subscriptionPriorityEnabled,
+					priorityDrainEnabled:           cached.priorityDrainEnabled,
+					priorityDrainTTFTThreshold:     cached.priorityDrainTTFTThreshold,
+					priorityDrainSlowCount:         cached.priorityDrainSlowCount,
+					priorityDrainWindow:            cached.priorityDrainWindow,
+					priorityDrainCooldown:          cached.priorityDrainCooldown,
 					lbTopKOverride:                 cached.lbTopKOverride,
 					weightOverrides:                cloneOpenAIAdvancedSchedulerWeightOverrides(cached.weightOverrides),
 				}, nil
@@ -1800,6 +1929,11 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 		enabled := false
 		stickyWeightedEnabled := false
 		subscriptionPriorityEnabled := false
+		priorityDrainEnabled := false
+		priorityDrainTTFTThreshold := defaultOpenAIPriorityDrainTTFTThreshold
+		priorityDrainSlowCount := defaultOpenAIPriorityDrainSlowCount
+		priorityDrainWindow := defaultOpenAIPriorityDrainWindow
+		priorityDrainCooldown := defaultOpenAIPriorityDrainCooldown
 		lbTopKOverride := 0
 		weightOverrides := map[string]float64{}
 		if repo := s.openAIAdvancedSchedulerSettingRepo(); repo != nil {
@@ -1812,6 +1946,11 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 				enabled = strings.EqualFold(strings.TrimSpace(values[openAIAdvancedSchedulerSettingKey]), "true")
 				stickyWeightedEnabled = strings.EqualFold(strings.TrimSpace(values[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled]), "true")
 				subscriptionPriorityEnabled = strings.EqualFold(strings.TrimSpace(values[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled]), "true")
+				priorityDrainEnabled = strings.EqualFold(strings.TrimSpace(values[SettingKeyOpenAIPriorityDrainEnabled]), "true")
+				priorityDrainTTFTThreshold = parseOpenAIPriorityDrainSettingInt(values[SettingKeyOpenAIPriorityDrainTTFTThresholdSeconds], defaultOpenAIPriorityDrainTTFTThreshold, 1, 120)
+				priorityDrainSlowCount = parseOpenAIPriorityDrainSettingInt(values[SettingKeyOpenAIPriorityDrainConsecutiveSlowCount], defaultOpenAIPriorityDrainSlowCount, 1, 10)
+				priorityDrainWindow = time.Duration(parseOpenAIPriorityDrainSettingInt(values[SettingKeyOpenAIPriorityDrainStatisticsWindowSeconds], int(defaultOpenAIPriorityDrainWindow.Seconds()), 1, 86400)) * time.Second
+				priorityDrainCooldown = time.Duration(parseOpenAIPriorityDrainSettingInt(values[SettingKeyOpenAIPriorityDrainSoftCooldownSeconds], int(defaultOpenAIPriorityDrainCooldown.Seconds()), 1, 86400)) * time.Second
 				lbTopKOverride = parsePositiveIntOverride(values[SettingKeyOpenAIAdvancedSchedulerLBTopK])
 				weightOverrides = parseOpenAIAdvancedSchedulerWeightOverrides(values)
 			} else {
@@ -1829,6 +1968,11 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 				enabled = strings.EqualFold(strings.TrimSpace(fallbackValues[openAIAdvancedSchedulerSettingKey]), "true")
 				stickyWeightedEnabled = strings.EqualFold(strings.TrimSpace(fallbackValues[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled]), "true")
 				subscriptionPriorityEnabled = strings.EqualFold(strings.TrimSpace(fallbackValues[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled]), "true")
+				priorityDrainEnabled = strings.EqualFold(strings.TrimSpace(fallbackValues[SettingKeyOpenAIPriorityDrainEnabled]), "true")
+				priorityDrainTTFTThreshold = parseOpenAIPriorityDrainSettingInt(fallbackValues[SettingKeyOpenAIPriorityDrainTTFTThresholdSeconds], defaultOpenAIPriorityDrainTTFTThreshold, 1, 120)
+				priorityDrainSlowCount = parseOpenAIPriorityDrainSettingInt(fallbackValues[SettingKeyOpenAIPriorityDrainConsecutiveSlowCount], defaultOpenAIPriorityDrainSlowCount, 1, 10)
+				priorityDrainWindow = time.Duration(parseOpenAIPriorityDrainSettingInt(fallbackValues[SettingKeyOpenAIPriorityDrainStatisticsWindowSeconds], int(defaultOpenAIPriorityDrainWindow.Seconds()), 1, 86400)) * time.Second
+				priorityDrainCooldown = time.Duration(parseOpenAIPriorityDrainSettingInt(fallbackValues[SettingKeyOpenAIPriorityDrainSoftCooldownSeconds], int(defaultOpenAIPriorityDrainCooldown.Seconds()), 1, 86400)) * time.Second
 				lbTopKOverride = parsePositiveIntOverride(fallbackValues[SettingKeyOpenAIAdvancedSchedulerLBTopK])
 				weightOverrides = parseOpenAIAdvancedSchedulerWeightOverrides(fallbackValues)
 			}
@@ -1840,6 +1984,11 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 			enabled:                        enabled,
 			stickyWeightedEnabled:          stickyWeightedEnabled,
 			subscriptionPriorityEnabled:    subscriptionPriorityEnabled,
+			priorityDrainEnabled:           priorityDrainEnabled,
+			priorityDrainTTFTThreshold:     priorityDrainTTFTThreshold,
+			priorityDrainSlowCount:         priorityDrainSlowCount,
+			priorityDrainWindow:            priorityDrainWindow,
+			priorityDrainCooldown:          priorityDrainCooldown,
 			lbTopKOverride:                 lbTopKOverride,
 			weightOverrides:                cloneOpenAIAdvancedSchedulerWeightOverrides(weightOverrides),
 			expiresAt:                      time.Now().Add(openAIAdvancedSchedulerSettingCacheTTL).UnixNano(),
@@ -1850,6 +1999,11 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 			enabled:                        enabled,
 			stickyWeightedEnabled:          stickyWeightedEnabled,
 			subscriptionPriorityEnabled:    subscriptionPriorityEnabled,
+			priorityDrainEnabled:           priorityDrainEnabled,
+			priorityDrainTTFTThreshold:     priorityDrainTTFTThreshold,
+			priorityDrainSlowCount:         priorityDrainSlowCount,
+			priorityDrainWindow:            priorityDrainWindow,
+			priorityDrainCooldown:          priorityDrainCooldown,
 			lbTopKOverride:                 lbTopKOverride,
 			weightOverrides:                weightOverrides,
 		}, nil
@@ -1874,12 +2028,23 @@ func (s *OpenAIGatewayService) openAIOAuthSchedulingRateMultiplier(ctx context.C
 
 func (s *OpenAIGatewayService) isOpenAIAdvancedSchedulerStickyWeightedEnabled(ctx context.Context) bool {
 	settings := s.openAIAdvancedSchedulerRuntimeSettings(ctx)
-	return settings.enabled && settings.stickyWeightedEnabled
+	return settings.enabled && !settings.priorityDrainEnabled && settings.stickyWeightedEnabled
 }
 
 func (s *OpenAIGatewayService) isOpenAIAdvancedSchedulerSubscriptionPriorityEnabled(ctx context.Context) bool {
 	settings := s.openAIAdvancedSchedulerRuntimeSettings(ctx)
-	return settings.enabled && settings.subscriptionPriorityEnabled
+	return settings.enabled && !settings.priorityDrainEnabled && settings.subscriptionPriorityEnabled
+}
+
+func (s *OpenAIGatewayService) openAIPriorityDrainSettings(ctx context.Context) openAIPriorityDrainSettings {
+	settings := s.openAIAdvancedSchedulerRuntimeSettings(ctx)
+	return openAIPriorityDrainSettings{
+		enabled:              settings.enabled && settings.priorityDrainEnabled,
+		ttftThresholdSeconds: settings.priorityDrainTTFTThreshold,
+		consecutiveSlowCount: settings.priorityDrainSlowCount,
+		statisticsWindow:     settings.priorityDrainWindow,
+		softCooldown:         settings.priorityDrainCooldown,
+	}.normalized()
 }
 
 func openAIAdvancedSchedulerRuntimeSettingKeys() []string {
@@ -1889,6 +2054,11 @@ func openAIAdvancedSchedulerRuntimeSettingKeys() []string {
 		openAIAdvancedSchedulerSettingKey,
 		SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled,
 		SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
+		SettingKeyOpenAIPriorityDrainEnabled,
+		SettingKeyOpenAIPriorityDrainTTFTThresholdSeconds,
+		SettingKeyOpenAIPriorityDrainConsecutiveSlowCount,
+		SettingKeyOpenAIPriorityDrainStatisticsWindowSeconds,
+		SettingKeyOpenAIPriorityDrainSoftCooldownSeconds,
 		SettingKeyOpenAIAdvancedSchedulerLBTopK,
 	}
 	for _, spec := range openAIAdvancedSchedulerWeightOverrideSpecs() {

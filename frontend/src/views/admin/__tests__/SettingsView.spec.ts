@@ -203,6 +203,7 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.openaiExperimentalScheduler.stickyWeightedDescription": "开启后 previous_response_id 和 session_hash 粘性进入高级调度打分；关闭时仍按旧逻辑硬命中粘性账号。",
     "admin.settings.openaiExperimentalScheduler.subscriptionPriorityTitle": "订阅优先",
     "admin.settings.openaiExperimentalScheduler.subscriptionPriorityDescription": "开启后先在 ChatGPT 订阅账号池中按权值选取；订阅池拿不到席位时再回退到非订阅账号池。",
+    "admin.settings.openaiExperimentalScheduler.priorityDrainTakenOver": "启用优先额度消耗后，粘性加权和订阅优先均由该策略接管；已有会话仍保持硬粘性。",
     "admin.settings.openaiExperimentalScheduler.weightsTitle": "调度权值覆盖",
     "admin.settings.openaiExperimentalScheduler.weightsDescription": "留空时使用配置/环境变量值；配置未设置时使用内置默认值。页面非空设置优先。",
     "admin.settings.openaiExperimentalScheduler.defaultPlaceholder": "配置/默认：{value}",
@@ -482,6 +483,11 @@ const baseSettingsResponse = {
   openai_advanced_scheduler_enabled: false,
   openai_advanced_scheduler_sticky_weighted_enabled: false,
   openai_advanced_scheduler_subscription_priority_enabled: false,
+  openai_priority_drain_enabled: false,
+  openai_priority_drain_ttft_threshold_seconds: 15,
+  openai_priority_drain_consecutive_slow_count: 2,
+  openai_priority_drain_statistics_window_seconds: 900,
+  openai_priority_drain_soft_cooldown_seconds: 900,
   openai_advanced_scheduler_lb_top_k: "",
   openai_advanced_scheduler_weight_priority: "",
   openai_advanced_scheduler_weight_load: "",
@@ -1010,6 +1016,23 @@ describe("admin SettingsView payment visible method controls", () => {
       "默认关闭。开启后仅影响本网关在 OpenAI 账号间的实验性调度选择逻辑",
     );
     expect(wrapper.text()).not.toContain("OpenAI 高级调度器");
+  });
+
+  it("prevents disabling the advanced scheduler while priority drain is enabled", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_advanced_scheduler_enabled: true,
+      openai_priority_drain_enabled: true,
+    });
+
+    const wrapper = mountView();
+    await flushPromises();
+
+    const toggle = wrapper.get('[data-testid="openai-advanced-scheduler-toggle"]');
+    expect((toggle.element as HTMLInputElement).disabled).toBe(true);
+    const stickyToggle = wrapper.get('[data-testid="openai-sticky-weighted-toggle"]');
+    expect((stickyToggle.element as HTMLInputElement).disabled).toBe(true);
+    expect(wrapper.text()).toContain("粘性加权和订阅优先均由该策略接管");
   });
 
   it("loads and saves upstream billing probe settings from the gateway tab", async () => {

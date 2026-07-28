@@ -255,6 +255,11 @@ type UpdateSettingsRequest struct {
 	OpenAIAdvancedSchedulerEnabled                     *bool    `json:"openai_advanced_scheduler_enabled"`
 	OpenAIAdvancedSchedulerStickyWeightedEnabled       *bool    `json:"openai_advanced_scheduler_sticky_weighted_enabled"`
 	OpenAIAdvancedSchedulerSubscriptionPriorityEnabled *bool    `json:"openai_advanced_scheduler_subscription_priority_enabled"`
+	OpenAIPriorityDrainEnabled                         *bool    `json:"openai_priority_drain_enabled"`
+	OpenAIPriorityDrainTTFTThresholdSeconds            *int     `json:"openai_priority_drain_ttft_threshold_seconds"`
+	OpenAIPriorityDrainConsecutiveSlowCount            *int     `json:"openai_priority_drain_consecutive_slow_count"`
+	OpenAIPriorityDrainStatisticsWindowSeconds         *int     `json:"openai_priority_drain_statistics_window_seconds"`
+	OpenAIPriorityDrainSoftCooldownSeconds             *int     `json:"openai_priority_drain_soft_cooldown_seconds"`
 	OpenAIAdvancedSchedulerLBTopK                      *string  `json:"openai_advanced_scheduler_lb_top_k"`
 	OpenAIAdvancedSchedulerWeightPriority              *string  `json:"openai_advanced_scheduler_weight_priority"`
 	OpenAIAdvancedSchedulerWeightLoad                  *string  `json:"openai_advanced_scheduler_weight_load"`
@@ -1600,6 +1605,36 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled
 		}(),
+		OpenAIPriorityDrainEnabled: func() bool {
+			if req.OpenAIPriorityDrainEnabled != nil {
+				return *req.OpenAIPriorityDrainEnabled
+			}
+			return previousSettings.OpenAIPriorityDrainEnabled
+		}(),
+		OpenAIPriorityDrainTTFTThresholdSeconds: func() int {
+			if req.OpenAIPriorityDrainTTFTThresholdSeconds != nil {
+				return *req.OpenAIPriorityDrainTTFTThresholdSeconds
+			}
+			return previousSettings.OpenAIPriorityDrainTTFTThresholdSeconds
+		}(),
+		OpenAIPriorityDrainConsecutiveSlowCount: func() int {
+			if req.OpenAIPriorityDrainConsecutiveSlowCount != nil {
+				return *req.OpenAIPriorityDrainConsecutiveSlowCount
+			}
+			return previousSettings.OpenAIPriorityDrainConsecutiveSlowCount
+		}(),
+		OpenAIPriorityDrainStatisticsWindowSeconds: func() int {
+			if req.OpenAIPriorityDrainStatisticsWindowSeconds != nil {
+				return *req.OpenAIPriorityDrainStatisticsWindowSeconds
+			}
+			return previousSettings.OpenAIPriorityDrainStatisticsWindowSeconds
+		}(),
+		OpenAIPriorityDrainSoftCooldownSeconds: func() int {
+			if req.OpenAIPriorityDrainSoftCooldownSeconds != nil {
+				return *req.OpenAIPriorityDrainSoftCooldownSeconds
+			}
+			return previousSettings.OpenAIPriorityDrainSoftCooldownSeconds
+		}(),
 		OpenAIAdvancedSchedulerLBTopK:                 stringSetting(req.OpenAIAdvancedSchedulerLBTopK, previousSettings.OpenAIAdvancedSchedulerLBTopK),
 		OpenAIAdvancedSchedulerWeightPriority:         stringSetting(req.OpenAIAdvancedSchedulerWeightPriority, previousSettings.OpenAIAdvancedSchedulerWeightPriority),
 		OpenAIAdvancedSchedulerWeightLoad:             stringSetting(req.OpenAIAdvancedSchedulerWeightLoad, previousSettings.OpenAIAdvancedSchedulerWeightLoad),
@@ -1998,6 +2033,11 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAIAdvancedSchedulerEnabled:                         updatedSettings.OpenAIAdvancedSchedulerEnabled,
 		OpenAIAdvancedSchedulerStickyWeightedEnabled:           updatedSettings.OpenAIAdvancedSchedulerStickyWeightedEnabled,
 		OpenAIAdvancedSchedulerSubscriptionPriorityEnabled:     updatedSettings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
+		OpenAIPriorityDrainEnabled:                             updatedSettings.OpenAIPriorityDrainEnabled,
+		OpenAIPriorityDrainTTFTThresholdSeconds:                updatedSettings.OpenAIPriorityDrainTTFTThresholdSeconds,
+		OpenAIPriorityDrainConsecutiveSlowCount:                updatedSettings.OpenAIPriorityDrainConsecutiveSlowCount,
+		OpenAIPriorityDrainStatisticsWindowSeconds:             updatedSettings.OpenAIPriorityDrainStatisticsWindowSeconds,
+		OpenAIPriorityDrainSoftCooldownSeconds:                 updatedSettings.OpenAIPriorityDrainSoftCooldownSeconds,
 		OpenAIAdvancedSchedulerLBTopK:                          updatedSettings.OpenAIAdvancedSchedulerLBTopK,
 		OpenAIAdvancedSchedulerWeightPriority:                  updatedSettings.OpenAIAdvancedSchedulerWeightPriority,
 		OpenAIAdvancedSchedulerWeightLoad:                      updatedSettings.OpenAIAdvancedSchedulerWeightLoad,

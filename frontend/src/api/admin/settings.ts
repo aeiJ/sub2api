@@ -617,6 +617,11 @@ export interface SystemSettings {
   openai_advanced_scheduler_enabled?: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled?: boolean;
   openai_advanced_scheduler_subscription_priority_enabled?: boolean;
+  openai_priority_drain_enabled?: boolean;
+  openai_priority_drain_ttft_threshold_seconds?: number;
+  openai_priority_drain_consecutive_slow_count?: number;
+  openai_priority_drain_statistics_window_seconds?: number;
+  openai_priority_drain_soft_cooldown_seconds?: number;
   openai_advanced_scheduler_lb_top_k?: string;
   openai_advanced_scheduler_weight_priority?: string;
   openai_advanced_scheduler_weight_load?: string;
@@ -899,6 +904,11 @@ export interface UpdateSettingsRequest {
   openai_advanced_scheduler_enabled?: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled?: boolean;
   openai_advanced_scheduler_subscription_priority_enabled?: boolean;
+  openai_priority_drain_enabled?: boolean;
+  openai_priority_drain_ttft_threshold_seconds?: number;
+  openai_priority_drain_consecutive_slow_count?: number;
+  openai_priority_drain_statistics_window_seconds?: number;
+  openai_priority_drain_soft_cooldown_seconds?: number;
   openai_advanced_scheduler_lb_top_k?: string;
   openai_advanced_scheduler_weight_priority?: string;
   openai_advanced_scheduler_weight_load?: string;

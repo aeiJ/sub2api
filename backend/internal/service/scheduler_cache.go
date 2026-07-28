@@ -80,6 +80,47 @@ type SchedulerDrainTargetBucket struct {
 	AccountType string
 }
 
+// OpenAIPriorityDrainTTFTState is the small, cross-process state kept for an
+// OpenAI API Key by the priority-drain ordering policy. It intentionally lives
+// beside scheduler cache state instead of an in-process map so every gateway
+// instance makes the same cooldown decision.
+type OpenAIPriorityDrainTTFTState struct {
+	LastTTFTMs          int64
+	SlowCount           int
+	CooldownUntilUnixMs int64
+}
+
+func (s OpenAIPriorityDrainTTFTState) IsCoolingDown(now time.Time) bool {
+	return s.CooldownUntilUnixMs > now.UnixMilli()
+}
+
+type OpenAIPriorityDrainTTFTObservation struct {
+	EnteredCooldown    bool
+	Recovered          bool
+	IgnoredStalePolicy bool
+}
+
+// OpenAIPriorityDrainTTFTPolicy identifies the global TTFT policy and the
+// account-level override seen by a scheduler instance. Redis fences both
+// values so an instance with a stale settings/account cache cannot recreate
+// cooldown state after an administrator changes the policy.
+type OpenAIPriorityDrainTTFTPolicy struct {
+	GlobalFingerprint  string
+	AccountFingerprint string
+}
+
+// OpenAIPriorityDrainTTFTStateStore is deliberately optional on
+// SchedulerCache. Existing cache fakes and deployments without Redis continue
+// to schedule normally; the hook fails open to static ordering in that case.
+type OpenAIPriorityDrainTTFTStateStore interface {
+	GetOpenAIPriorityDrainTTFTStates(ctx context.Context, policies map[int64]OpenAIPriorityDrainTTFTPolicy) (map[int64]OpenAIPriorityDrainTTFTState, error)
+	ObserveOpenAIPriorityDrainTTFT(ctx context.Context, accountID, ttftMs, thresholdMs int64, slowCount int, window, cooldown time.Duration, policy OpenAIPriorityDrainTTFTPolicy) (OpenAIPriorityDrainTTFTObservation, error)
+	FenceOpenAIPriorityDrainTTFTGlobalPolicy(ctx context.Context, fingerprint string) error
+	FenceOpenAIPriorityDrainTTFTAccountPolicies(ctx context.Context, fingerprints map[int64]string) error
+	ClearOpenAIPriorityDrainTTFTStates(ctx context.Context, accountIDs []int64) error
+	ClearAllOpenAIPriorityDrainTTFTStates(ctx context.Context) error
+}
+
 func NewSchedulerDrainTargetBucket(bucket SchedulerBucket, accountType string) SchedulerDrainTargetBucket {
 	return SchedulerDrainTargetBucket{
 		GroupID:     bucket.GroupID,

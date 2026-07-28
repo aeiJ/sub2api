@@ -145,6 +145,16 @@ type SchedulerSnapshotService struct {
 	fullRebuildLastErr   error
 }
 
+// OpenAIPriorityDrainTTFTStateStore exposes the optional Redis-backed state
+// required by the OpenAI priority-drain hook without widening SchedulerCache.
+func (s *SchedulerSnapshotService) OpenAIPriorityDrainTTFTStateStore() OpenAIPriorityDrainTTFTStateStore {
+	if s == nil || s.cache == nil {
+		return nil
+	}
+	store, _ := s.cache.(OpenAIPriorityDrainTTFTStateStore)
+	return store
+}
+
 func NewSchedulerSnapshotService(
 	cache SchedulerCache,
 	outboxRepo SchedulerOutboxRepository,
