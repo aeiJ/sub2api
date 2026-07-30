@@ -346,6 +346,39 @@ func TestOpenAIAccountOrderingHookFallsBackToStaticOrderWhenRedisIsUnavailable(t
 	require.Equal(t, int64(1), hook.SnapshotMetrics().RedisFallbackTotal)
 }
 
+func TestOpenAIPriorityDrainLogLimiterReportsSuppressedFailuresAtNextInterval(t *testing.T) {
+	var limiter openAIPriorityDrainLogLimiter
+	base := time.Unix(1_800_000_000, 0)
+
+	allowed, suppressed := limiter.Allow(base, time.Minute)
+	require.True(t, allowed)
+	require.Zero(t, suppressed)
+
+	allowed, _ = limiter.Allow(base.Add(time.Second), time.Minute)
+	require.False(t, allowed)
+	allowed, _ = limiter.Allow(base.Add(30*time.Second), time.Minute)
+	require.False(t, allowed)
+
+	allowed, suppressed = limiter.Allow(base.Add(time.Minute), time.Minute)
+	require.True(t, allowed)
+	require.Equal(t, int64(2), suppressed)
+}
+
+func TestOpenAIPriorityDrainRedisFallbackMetricCountsSuppressedLogs(t *testing.T) {
+	hook := &OpenAIAccountOrderingHook{stateStore: &openAIPriorityDrainStateStoreStub{getErr: errors.New("redis unavailable")}}
+	account := &Account{
+		ID:       46,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		GroupIDs: []int64{10},
+	}
+	settings := openAIPriorityDrainSettings{enabled: true}
+
+	require.False(t, hook.IsAPIKeyCoolingDown(context.Background(), account, settings))
+	require.False(t, hook.IsAPIKeyCoolingDown(context.Background(), account, settings))
+	require.Equal(t, int64(2), hook.SnapshotMetrics().RedisFallbackTotal)
+}
+
 func TestOpenAIAccountOrderingHookObserveTTFTUsesAccountOverrideAndRecordsLifecycle(t *testing.T) {
 	store := &openAIPriorityDrainStateStoreStub{observeResults: []OpenAIPriorityDrainTTFTObservation{
 		{EnteredCooldown: true},
@@ -455,11 +488,12 @@ func TestOpenAIPriorityDrainRequiresAdvancedSchedulerAndTakesOverSubscriptionPri
 	require.True(t, gateway.isOpenAIAdvancedSchedulerSubscriptionPriorityEnabled(context.Background()))
 }
 
-func TestOpenAIPriorityDrainPreservesExistingSessionAndPreviousResponseBindings(t *testing.T) {
+func newOpenAIPriorityDrainBindingTestService(
+	t *testing.T,
+	store *openAIPriorityDrainStateStoreStub,
+) (*OpenAIGatewayService, *schedulerTestGatewayCache, *OpenAIAccountOrderingHook, Account, Account) {
+	t.Helper()
 	resetOpenAIAdvancedSchedulerSettingCacheForTest()
-	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
-
-	ctx := context.Background()
 	groupID := int64(77)
 	sticky := Account{
 		ID: 7701, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive,
@@ -470,7 +504,7 @@ func TestOpenAIPriorityDrainPreservesExistingSessionAndPreviousResponseBindings(
 		ID: 7702, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
 		Schedulable: true, Concurrency: 2, Priority: 0, GroupIDs: []int64{groupID},
 	}
-	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:priority_drain_session": sticky.ID}}
+	cache := &schedulerTestGatewayCache{}
 	repo := &openAIAdvancedSchedulerSettingRepoStub{values: map[string]string{
 		openAIAdvancedSchedulerSettingKey:                      "true",
 		SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled: "true",
@@ -484,26 +518,168 @@ func TestOpenAIPriorityDrainPreservesExistingSessionAndPreviousResponseBindings(
 		rateLimitService:   &RateLimitService{settingService: NewSettingService(repo, &config.Config{})},
 		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
 	}
+	hook := &OpenAIAccountOrderingHook{stateStore: store}
+	scheduler := newDefaultOpenAIAccountScheduler(service, nil)
+	defaultScheduler, ok := scheduler.(*defaultOpenAIAccountScheduler)
+	require.True(t, ok)
+	defaultScheduler.priorityDrainHook = hook
+	service.openaiScheduler = scheduler
+	return service, cache, hook, sticky, preferred
+}
+
+func TestOpenAIPriorityDrainCooledSessionStickyReentersScheduling(t *testing.T) {
+	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	store := &openAIPriorityDrainStateStoreStub{states: map[int64]OpenAIPriorityDrainTTFTState{
+		7701: {LastTTFTMs: 20_000, CooldownUntilUnixMs: time.Now().Add(time.Minute).UnixMilli()},
+	}}
+	service, cache, hook, sticky, preferred := newOpenAIPriorityDrainBindingTestService(t, store)
+	cache.sessionBindings = map[string]int64{"openai:priority_drain_session": sticky.ID}
+	groupID := int64(77)
+
+	selection, decision, err := service.SelectAccountWithScheduler(
+		context.Background(), &groupID, "", "priority_drain_session", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, preferred.ID, selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	require.Equal(t, preferred.ID, cache.sessionBindings["openai:priority_drain_session"])
+	require.Equal(t, 1, cache.deletedSessions["openai:priority_drain_session"])
+	require.Equal(t, int64(1), hook.SnapshotMetrics().CooldownStickyEscapeTotal)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIPriorityDrainActiveSessionStickyKeepsBinding(t *testing.T) {
+	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	store := &openAIPriorityDrainStateStoreStub{states: map[int64]OpenAIPriorityDrainTTFTState{
+		7701: {LastTTFTMs: 9_000},
+	}}
+	service, cache, hook, sticky, _ := newOpenAIPriorityDrainBindingTestService(t, store)
+	cache.sessionBindings = map[string]int64{"openai:priority_drain_session": sticky.ID}
+	groupID := int64(77)
+
+	selection, decision, err := service.SelectAccountWithScheduler(
+		context.Background(), &groupID, "", "priority_drain_session", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, sticky.ID, selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerSessionSticky, decision.Layer)
+	require.Equal(t, sticky.ID, cache.sessionBindings["openai:priority_drain_session"])
+	require.Zero(t, cache.deletedSessions["openai:priority_drain_session"])
+	require.Zero(t, hook.SnapshotMetrics().CooldownStickyEscapeTotal)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIPriorityDrainCooledMovablePreviousResponseReentersScheduling(t *testing.T) {
+	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	store := &openAIPriorityDrainStateStoreStub{states: map[int64]OpenAIPriorityDrainTTFTState{
+		7701: {LastTTFTMs: 20_000, CooldownUntilUnixMs: time.Now().Add(time.Minute).UnixMilli()},
+	}}
+	service, cache, hook, sticky, preferred := newOpenAIPriorityDrainBindingTestService(t, store)
+	ctx := context.Background()
+	groupID := int64(77)
 	require.NoError(t, service.getOpenAIWSStateStore().BindResponseAccount(ctx, groupID, "resp_priority_drain", sticky.ID, time.Hour))
 
-	previousSelection, previousDecision, err := service.SelectAccountWithScheduler(
+	selection, decision, err := service.SelectAccountWithSchedulerForCapability(
+		ctx, &groupID, "resp_priority_drain", "priority_drain_movable", "gpt-5.1", nil,
+		OpenAIUpstreamTransportAny, OpenAIEndpointCapabilityChatCompletions, false, true, true, PlatformOpenAI,
+	)
+	require.NoError(t, err)
+	require.Equal(t, preferred.ID, selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	require.Equal(t, preferred.ID, cache.sessionBindings["openai:priority_drain_movable"])
+	require.Equal(t, int64(1), hook.SnapshotMetrics().CooldownPreviousResponseMovedTotal)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIPriorityDrainAllCooledPreviousResponseFallbackToSameAccountDoesNotRecordMove(t *testing.T) {
+	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	cooldownUntil := time.Now().Add(time.Minute).UnixMilli()
+	store := &openAIPriorityDrainStateStoreStub{states: map[int64]OpenAIPriorityDrainTTFTState{
+		7701: {LastTTFTMs: 1_000, CooldownUntilUnixMs: cooldownUntil},
+		7703: {LastTTFTMs: 9_000, CooldownUntilUnixMs: cooldownUntil},
+	}}
+	service, _, hook, sticky, _ := newOpenAIPriorityDrainBindingTestService(t, store)
+	groupID := int64(77)
+	fallback := Account{
+		ID: 7703, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive,
+		Schedulable: true, Concurrency: 2, Priority: 0, GroupIDs: []int64{groupID},
+	}
+	service.accountRepo = schedulerTestOpenAIAccountRepo{accounts: []Account{sticky, fallback}}
+	ctx := context.Background()
+	require.NoError(t, service.getOpenAIWSStateStore().BindResponseAccount(ctx, groupID, "resp_priority_drain_all_cooled", sticky.ID, time.Hour))
+
+	selection, decision, err := service.SelectAccountWithSchedulerForCapability(
+		ctx, &groupID, "resp_priority_drain_all_cooled", "priority_drain_all_cooled", "gpt-5.1", nil,
+		OpenAIUpstreamTransportAny, OpenAIEndpointCapabilityChatCompletions, false, true, true, PlatformOpenAI,
+	)
+	require.NoError(t, err)
+	require.Equal(t, sticky.ID, selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	metrics := hook.SnapshotMetrics()
+	require.Equal(t, int64(1), metrics.APIKeyAllCooledFallbackTotal)
+	require.Zero(t, metrics.CooldownPreviousResponseMovedTotal)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIPriorityDrainFailedRerouteDoesNotRecordMove(t *testing.T) {
+	hook := &OpenAIAccountOrderingHook{}
+	scheduler := &defaultOpenAIAccountScheduler{priorityDrainHook: hook}
+
+	scheduler.recordOpenAIPriorityDrainCooldownReroute(&openAIPriorityDrainCooldownReroute{
+		accountID: 7701,
+		layer:     openAIAccountScheduleLayerPreviousResponse,
+	}, nil)
+
+	require.Zero(t, hook.SnapshotMetrics().CooldownPreviousResponseMovedTotal)
+}
+
+func TestOpenAIPriorityDrainCooledNonMovablePreviousResponsePreservesBinding(t *testing.T) {
+	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	store := &openAIPriorityDrainStateStoreStub{states: map[int64]OpenAIPriorityDrainTTFTState{
+		7701: {LastTTFTMs: 20_000, CooldownUntilUnixMs: time.Now().Add(time.Minute).UnixMilli()},
+	}}
+	service, _, hook, sticky, _ := newOpenAIPriorityDrainBindingTestService(t, store)
+	ctx := context.Background()
+	groupID := int64(77)
+	require.NoError(t, service.getOpenAIWSStateStore().BindResponseAccount(ctx, groupID, "resp_priority_drain", sticky.ID, time.Hour))
+
+	selection, decision, err := service.SelectAccountWithScheduler(
 		ctx, &groupID, "resp_priority_drain", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false,
 	)
 	require.NoError(t, err)
-	require.Equal(t, sticky.ID, previousSelection.Account.ID)
-	require.Equal(t, openAIAccountScheduleLayerPreviousResponse, previousDecision.Layer)
-	if previousSelection.ReleaseFunc != nil {
-		previousSelection.ReleaseFunc()
+	require.Equal(t, sticky.ID, selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerPreviousResponse, decision.Layer)
+	require.Equal(t, int64(1), hook.SnapshotMetrics().CooldownPreviousResponsePreservedTotal)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
 	}
+}
 
-	sessionSelection, sessionDecision, err := service.SelectAccountWithScheduler(
-		ctx, &groupID, "", "priority_drain_session", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false,
+func TestOpenAIPriorityDrainRedisFailureKeepsSessionSticky(t *testing.T) {
+	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	store := &openAIPriorityDrainStateStoreStub{getErr: errors.New("redis unavailable")}
+	service, cache, hook, sticky, _ := newOpenAIPriorityDrainBindingTestService(t, store)
+	cache.sessionBindings = map[string]int64{"openai:priority_drain_session": sticky.ID}
+	groupID := int64(77)
+
+	selection, decision, err := service.SelectAccountWithScheduler(
+		context.Background(), &groupID, "", "priority_drain_session", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false,
 	)
 	require.NoError(t, err)
-	require.Equal(t, sticky.ID, sessionSelection.Account.ID)
-	require.Equal(t, openAIAccountScheduleLayerSessionSticky, sessionDecision.Layer)
-	if sessionSelection.ReleaseFunc != nil {
-		sessionSelection.ReleaseFunc()
+	require.Equal(t, sticky.ID, selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerSessionSticky, decision.Layer)
+	require.Equal(t, int64(1), hook.SnapshotMetrics().RedisFallbackTotal)
+	require.Zero(t, cache.deletedSessions["openai:priority_drain_session"])
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
 	}
 }
 

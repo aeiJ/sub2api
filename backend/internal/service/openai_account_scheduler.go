@@ -300,6 +300,11 @@ type defaultOpenAIAccountScheduler struct {
 	priorityDrainHook *OpenAIAccountOrderingHook
 }
 
+type openAIPriorityDrainCooldownReroute struct {
+	accountID int64
+	layer     string
+}
+
 type openAISelectionProbeBudget struct {
 	acquires  int
 	rechecks  int
@@ -394,6 +399,8 @@ func (s *defaultOpenAIAccountScheduler) Select(
 	}()
 
 	previousResponseID := strings.TrimSpace(req.PreviousResponseID)
+	priorityDrainSettings := s.service.openAIPriorityDrainSettings(ctx)
+	var cooldownReroute *openAIPriorityDrainCooldownReroute
 	if previousResponseID != "" && normalizeOpenAICompatiblePlatform(req.Platform) == PlatformOpenAI &&
 		(!req.StickyWeighted || !req.PreviousResponseCanMove) {
 		selection, err := s.service.selectAccountByPreviousResponseIDForCapability(
@@ -417,6 +424,30 @@ func (s *defaultOpenAIAccountScheduler) Select(
 			}
 		}
 		if selection != nil && selection.Account != nil {
+			if s.priorityDrainHook.IsAPIKeyCoolingDown(ctx, selection.Account, priorityDrainSettings) {
+				if req.PreviousResponseCanMove {
+					cooldownReroute = &openAIPriorityDrainCooldownReroute{
+						accountID: selection.Account.ID,
+						layer:     openAIAccountScheduleLayerPreviousResponse,
+					}
+					if selection.ReleaseFunc != nil {
+						selection.ReleaseFunc()
+					}
+					if req.SessionHash != "" {
+						_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, req.SessionHash)
+					}
+					selection = nil
+				} else {
+					s.priorityDrainHook.RecordCooldownPreviousResponsePreserved()
+					slog.Info("openai_priority_drain_cooldown_previous_response_preserved",
+						"account_id", selection.Account.ID,
+						"selection_layer", openAIAccountScheduleLayerPreviousResponse,
+						"reason", "previous_response_not_movable",
+					)
+				}
+			}
+		}
+		if selection != nil && selection.Account != nil {
 			decision.Layer = openAIAccountScheduleLayerPreviousResponse
 			decision.StickyPreviousHit = true
 			decision.SelectedAccountID = selection.Account.ID
@@ -434,6 +465,22 @@ func (s *defaultOpenAIAccountScheduler) Select(
 			return nil, decision, err
 		}
 		if selection != nil && selection.Account != nil {
+			if s.priorityDrainHook.IsAPIKeyCoolingDown(ctx, selection.Account, priorityDrainSettings) {
+				if cooldownReroute == nil {
+					cooldownReroute = &openAIPriorityDrainCooldownReroute{
+						accountID: selection.Account.ID,
+						layer:     openAIAccountScheduleLayerSessionSticky,
+					}
+				}
+				if selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, req.SessionHash)
+				selection = nil
+			}
+		}
+		if selection != nil && selection.Account != nil {
+			s.recordOpenAIPriorityDrainCooldownReroute(cooldownReroute, selection)
 			decision.Layer = openAIAccountScheduleLayerSessionSticky
 			decision.StickySessionHit = true
 			decision.SelectedAccountID = selection.Account.ID
@@ -453,6 +500,7 @@ func (s *defaultOpenAIAccountScheduler) Select(
 	if err != nil {
 		return nil, decision, err
 	}
+	s.recordOpenAIPriorityDrainCooldownReroute(cooldownReroute, selection)
 	if selection != nil && selection.Account != nil {
 		decision.SelectedAccountID = selection.Account.ID
 		decision.SelectedAccountType = selection.Account.Type
@@ -466,6 +514,35 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		}
 	}
 	return selection, decision, nil
+}
+
+func (s *defaultOpenAIAccountScheduler) recordOpenAIPriorityDrainCooldownReroute(
+	reroute *openAIPriorityDrainCooldownReroute,
+	selection *AccountSelectionResult,
+) {
+	if s == nil || s.priorityDrainHook == nil || reroute == nil || selection == nil || selection.Account == nil ||
+		selection.Account.ID == reroute.accountID {
+		return
+	}
+
+	switch reroute.layer {
+	case openAIAccountScheduleLayerPreviousResponse:
+		s.priorityDrainHook.RecordCooldownPreviousResponseMoved()
+		slog.Info("openai_priority_drain_cooldown_previous_response_moved",
+			"from_account_id", reroute.accountID,
+			"to_account_id", selection.Account.ID,
+			"selection_layer", reroute.layer,
+			"reason", "ttft_soft_cooldown",
+		)
+	case openAIAccountScheduleLayerSessionSticky:
+		s.priorityDrainHook.RecordCooldownStickyEscape()
+		slog.Info("openai_priority_drain_cooldown_sticky_escape",
+			"from_account_id", reroute.accountID,
+			"to_account_id", selection.Account.ID,
+			"selection_layer", reroute.layer,
+			"reason", "ttft_soft_cooldown",
+		)
+	}
 }
 
 func (s *defaultOpenAIAccountScheduler) selectBySessionHash(

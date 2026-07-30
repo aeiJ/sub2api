@@ -104,7 +104,7 @@ end
 if ttft <= threshold then
     local hadSlowState = redis.call('HGET', KEYS[1], 'slow_count')
     local hadCooldown = redis.call('HGET', KEYS[1], 'cooldown_until_ms')
-    redis.call('HSET', KEYS[1], 'last_ttft_ms', ttft, 'slow_count', 0, 'last_slow_at_ms', 0, 'cooldown_until_ms', 0, 'global_policy', expected_global_policy, 'account_policy', expected_account_policy)
+    redis.call('HSET', KEYS[1], 'last_ttft_ms', ttft, 'slow_count', 0, 'first_slow_at_ms', 0, 'last_slow_at_ms', 0, 'cooldown_until_ms', 0, 'global_policy', expected_global_policy, 'account_policy', expected_account_policy)
     redis.call('PEXPIRE', KEYS[1], ttl)
     if (tonumber(hadSlowState) or 0) > 0 or (tonumber(hadCooldown) or 0) > now then
         return 2
@@ -114,15 +114,19 @@ end
 
 local previousSlowAt = tonumber(redis.call('HGET', KEYS[1], 'last_slow_at_ms')) or 0
 local previousCount = tonumber(redis.call('HGET', KEYS[1], 'slow_count')) or 0
+local firstSlowAt = tonumber(redis.call('HGET', KEYS[1], 'first_slow_at_ms')) or previousSlowAt
 local cooldownUntil = tonumber(redis.call('HGET', KEYS[1], 'cooldown_until_ms')) or 0
 if cooldownUntil > 0 and cooldownUntil <= now then
     previousSlowAt = 0
     previousCount = 0
+    firstSlowAt = 0
     cooldownUntil = 0
 end
 local nextCount = 1
-if previousSlowAt > 0 and now - previousSlowAt <= window then
+local nextFirstSlowAt = now
+if previousCount > 0 and firstSlowAt > 0 and now - firstSlowAt <= window then
     nextCount = previousCount + 1
+    nextFirstSlowAt = firstSlowAt
 end
 
 local enteredCooldown = 0
@@ -134,7 +138,7 @@ if nextCount >= required then
     cooldownUntil = nextCooldownUntil
 end
 
-redis.call('HSET', KEYS[1], 'last_ttft_ms', ttft, 'slow_count', nextCount, 'last_slow_at_ms', now, 'cooldown_until_ms', cooldownUntil, 'global_policy', expected_global_policy, 'account_policy', expected_account_policy)
+redis.call('HSET', KEYS[1], 'last_ttft_ms', ttft, 'slow_count', nextCount, 'first_slow_at_ms', nextFirstSlowAt, 'last_slow_at_ms', now, 'cooldown_until_ms', cooldownUntil, 'global_policy', expected_global_policy, 'account_policy', expected_account_policy)
 redis.call('PEXPIRE', KEYS[1], ttl)
 return enteredCooldown
 `)
@@ -919,6 +923,10 @@ func (c *schedulerCache) GetOpenAIPriorityDrainTTFTStates(ctx context.Context, p
 }
 
 func (c *schedulerCache) ObserveOpenAIPriorityDrainTTFT(ctx context.Context, accountID, ttftMs, thresholdMs int64, slowCount int, window, cooldown time.Duration, policy service.OpenAIPriorityDrainTTFTPolicy) (service.OpenAIPriorityDrainTTFTObservation, error) {
+	return c.observeOpenAIPriorityDrainTTFTAt(ctx, accountID, ttftMs, thresholdMs, slowCount, window, cooldown, policy, time.Now())
+}
+
+func (c *schedulerCache) observeOpenAIPriorityDrainTTFTAt(ctx context.Context, accountID, ttftMs, thresholdMs int64, slowCount int, window, cooldown time.Duration, policy service.OpenAIPriorityDrainTTFTPolicy, observedAt time.Time) (service.OpenAIPriorityDrainTTFTObservation, error) {
 	if accountID <= 0 || ttftMs < 0 || thresholdMs <= 0 || slowCount <= 0 || window <= 0 || cooldown <= 0 || policy.GlobalFingerprint == "" || policy.AccountFingerprint == "" {
 		return service.OpenAIPriorityDrainTTFTObservation{}, nil
 	}
@@ -936,7 +944,7 @@ func (c *schedulerCache) ObserveOpenAIPriorityDrainTTFT(ctx context.Context, acc
 			openAIPriorityDrainGlobalPolicyKey,
 			openAIPriorityDrainAccountPolicyKey(accountID),
 		},
-		time.Now().UnixMilli(),
+		observedAt.UnixMilli(),
 		ttftMs,
 		thresholdMs,
 		slowCount,

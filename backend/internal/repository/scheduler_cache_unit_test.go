@@ -145,6 +145,54 @@ func TestSchedulerCacheOpenAIPriorityDrainTTFTStatisticsWindowStartsFreshSequenc
 	require.Zero(t, states[accountID].CooldownUntilUnixMs)
 }
 
+func TestSchedulerCacheOpenAIPriorityDrainTTFTStatisticsWindowBoundsFullSequence(t *testing.T) {
+	ctx := context.Background()
+	cache := newSchedulerCacheUnit(t)
+	accountID := int64(996)
+	policy := schedulerCachePriorityDrainPolicy("global-v1", "default")
+	base := time.Now().Truncate(time.Millisecond)
+	window := 4 * time.Minute
+
+	first, err := cache.observeOpenAIPriorityDrainTTFTAt(ctx, accountID, 11_000, 10_000, 3, window, time.Minute, policy, base)
+	require.NoError(t, err)
+	require.False(t, first.EnteredCooldown)
+
+	second, err := cache.observeOpenAIPriorityDrainTTFTAt(ctx, accountID, 12_000, 10_000, 3, window, time.Minute, policy, base.Add(3*time.Minute+59*time.Second))
+	require.NoError(t, err)
+	require.False(t, second.EnteredCooldown)
+
+	third, err := cache.observeOpenAIPriorityDrainTTFTAt(ctx, accountID, 13_000, 10_000, 3, window, time.Minute, policy, base.Add(7*time.Minute+58*time.Second))
+	require.NoError(t, err)
+	require.False(t, third.EnteredCooldown)
+
+	states, err := cache.GetOpenAIPriorityDrainTTFTStates(ctx, schedulerCachePriorityDrainPolicies(accountID, policy))
+	require.NoError(t, err)
+	require.Equal(t, 1, states[accountID].SlowCount)
+	require.Zero(t, states[accountID].CooldownUntilUnixMs)
+}
+
+func TestSchedulerCacheOpenAIPriorityDrainTTFTStatisticsWindowIncludesExactBoundary(t *testing.T) {
+	ctx := context.Background()
+	cache := newSchedulerCacheUnit(t)
+	accountID := int64(997)
+	policy := schedulerCachePriorityDrainPolicy("global-v1", "default")
+	base := time.Now().Truncate(time.Millisecond)
+	window := 4 * time.Minute
+
+	_, err := cache.observeOpenAIPriorityDrainTTFTAt(ctx, accountID, 11_000, 10_000, 3, window, time.Minute, policy, base)
+	require.NoError(t, err)
+	_, err = cache.observeOpenAIPriorityDrainTTFTAt(ctx, accountID, 12_000, 10_000, 3, window, time.Minute, policy, base.Add(time.Minute))
+	require.NoError(t, err)
+	third, err := cache.observeOpenAIPriorityDrainTTFTAt(ctx, accountID, 13_000, 10_000, 3, window, time.Minute, policy, base.Add(window))
+	require.NoError(t, err)
+	require.True(t, third.EnteredCooldown)
+
+	states, err := cache.GetOpenAIPriorityDrainTTFTStates(ctx, schedulerCachePriorityDrainPolicies(accountID, policy))
+	require.NoError(t, err)
+	require.Equal(t, 3, states[accountID].SlowCount)
+	require.Equal(t, base.Add(window+time.Minute).UnixMilli(), states[accountID].CooldownUntilUnixMs)
+}
+
 func TestSchedulerCacheOpenAIPriorityDrainTTFTGlobalFenceRejectsStaleWriter(t *testing.T) {
 	ctx := context.Background()
 	cache := newSchedulerCacheUnit(t)

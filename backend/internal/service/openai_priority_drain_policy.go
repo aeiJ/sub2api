@@ -21,6 +21,7 @@ const (
 	defaultOpenAIPriorityDrainSlowCount      = 2
 	defaultOpenAIPriorityDrainWindow         = 15 * time.Minute
 	defaultOpenAIPriorityDrainCooldown       = 15 * time.Minute
+	openAIPriorityDrainRedisFallbackLogEvery = time.Minute
 )
 
 type openAIPriorityDrainSettings struct {
@@ -54,6 +55,9 @@ type openAIPriorityDrainMetrics struct {
 	apiKeyCooldownTotal             atomic.Int64
 	apiKeyAllCooledFallbackTotal    atomic.Int64
 	apiKeyRecoveredTotal            atomic.Int64
+	cooldownStickyEscapeTotal       atomic.Int64
+	cooldownPreviousMovedTotal      atomic.Int64
+	cooldownPreviousPreservedTotal  atomic.Int64
 	redisFallbackTotal              atomic.Int64
 }
 
@@ -62,8 +66,31 @@ type openAIPriorityDrainMetrics struct {
 // Candidate eligibility, slot acquisition, stickiness, DB rechecks, and
 // failover stay in defaultOpenAIAccountScheduler.
 type OpenAIAccountOrderingHook struct {
-	stateStore OpenAIPriorityDrainTTFTStateStore
-	metrics    openAIPriorityDrainMetrics
+	stateStore              OpenAIPriorityDrainTTFTStateStore
+	metrics                 openAIPriorityDrainMetrics
+	redisFallbackLogLimiter openAIPriorityDrainLogLimiter
+}
+
+type openAIPriorityDrainLogLimiter struct {
+	lastUnixNano atomic.Int64
+	suppressed   atomic.Int64
+}
+
+func (l *openAIPriorityDrainLogLimiter) Allow(now time.Time, interval time.Duration) (bool, int64) {
+	if l == nil || interval <= 0 {
+		return true, 0
+	}
+	nowUnixNano := now.UnixNano()
+	for {
+		lastUnixNano := l.lastUnixNano.Load()
+		if lastUnixNano != 0 && nowUnixNano-lastUnixNano < interval.Nanoseconds() {
+			l.suppressed.Add(1)
+			return false, 0
+		}
+		if l.lastUnixNano.CompareAndSwap(lastUnixNano, nowUnixNano) {
+			return true, l.suppressed.Swap(0)
+		}
+	}
 }
 
 func NewOpenAIAccountOrderingHook(snapshot *SchedulerSnapshotService) *OpenAIAccountOrderingHook {
@@ -152,8 +179,7 @@ func (h *OpenAIAccountOrderingHook) Order(
 		}
 		states, err := h.stateStore.GetOpenAIPriorityDrainTTFTStates(ctx, policies)
 		if err != nil {
-			h.metrics.redisFallbackTotal.Add(1)
-			slog.Warn("openai_priority_drain_redis_state_read_failed", "error", err)
+			h.recordRedisFallback("openai_priority_drain_redis_state_read_failed", "candidate_state_read", 0, err)
 		} else {
 			for i := range apiKeys {
 				apiKeys[i].state = states[apiKeys[i].candidate.account.ID]
@@ -260,6 +286,51 @@ func openAIPriorityDrainCurrentConcurrency(candidate openAIPriorityDrainCandidat
 	return candidate.candidate.loadInfo.CurrentConcurrency
 }
 
+// IsAPIKeyCoolingDown applies the same account policy used by Order to a
+// sticky selection. Redis remains optional: read failures preserve the
+// existing binding so the scheduler fails open.
+func (h *OpenAIAccountOrderingHook) IsAPIKeyCoolingDown(
+	ctx context.Context,
+	account *Account,
+	settings openAIPriorityDrainSettings,
+) bool {
+	if h == nil || !settings.enabled || account == nil || !account.IsOpenAIApiKey() || !openAIPriorityDrainAccountIsGrouped(account) {
+		return false
+	}
+	if h.stateStore == nil {
+		h.metrics.redisFallbackTotal.Add(1)
+		return false
+	}
+	settings = settings.normalized()
+	policy := openAIPriorityDrainTTFTPolicyForAccount(account, settings)
+	states, err := h.stateStore.GetOpenAIPriorityDrainTTFTStates(ctx, map[int64]OpenAIPriorityDrainTTFTPolicy{
+		account.ID: policy,
+	})
+	if err != nil {
+		h.recordRedisFallback("openai_priority_drain_cooldown_state_read_failed", "sticky_cooldown_read", account.ID, err)
+		return false
+	}
+	return states[account.ID].IsCoolingDown(time.Now())
+}
+
+func (h *OpenAIAccountOrderingHook) RecordCooldownStickyEscape() {
+	if h != nil {
+		h.metrics.cooldownStickyEscapeTotal.Add(1)
+	}
+}
+
+func (h *OpenAIAccountOrderingHook) RecordCooldownPreviousResponseMoved() {
+	if h != nil {
+		h.metrics.cooldownPreviousMovedTotal.Add(1)
+	}
+}
+
+func (h *OpenAIAccountOrderingHook) RecordCooldownPreviousResponsePreserved() {
+	if h != nil {
+		h.metrics.cooldownPreviousPreservedTotal.Add(1)
+	}
+}
+
 func (h *OpenAIAccountOrderingHook) ObserveTTFT(
 	ctx context.Context,
 	account *Account,
@@ -284,8 +355,7 @@ func (h *OpenAIAccountOrderingHook) ObserveTTFT(
 		policy,
 	)
 	if err != nil {
-		h.metrics.redisFallbackTotal.Add(1)
-		slog.Warn("openai_priority_drain_ttft_observe_failed", "account_id", account.ID, "error", err)
+		h.recordRedisFallback("openai_priority_drain_ttft_observe_failed", "ttft_observe", account.ID, err)
 		return
 	}
 	if observation.EnteredCooldown {
@@ -294,6 +364,26 @@ func (h *OpenAIAccountOrderingHook) ObserveTTFT(
 	if observation.Recovered {
 		h.metrics.apiKeyRecoveredTotal.Add(1)
 	}
+}
+
+func (h *OpenAIAccountOrderingHook) recordRedisFallback(event, operation string, accountID int64, err error) {
+	if h == nil {
+		return
+	}
+	h.metrics.redisFallbackTotal.Add(1)
+	allowed, suppressed := h.redisFallbackLogLimiter.Allow(time.Now(), openAIPriorityDrainRedisFallbackLogEvery)
+	if !allowed {
+		return
+	}
+	attrs := []any{
+		"operation", operation,
+		"suppressed_count", suppressed,
+		"error", err,
+	}
+	if accountID > 0 {
+		attrs = append(attrs, "account_id", accountID)
+	}
+	slog.Warn(event, attrs...)
 }
 
 func openAIPriorityDrainTTFTPolicyForAccount(account *Account, settings openAIPriorityDrainSettings) OpenAIPriorityDrainTTFTPolicy {
@@ -376,22 +466,28 @@ func (h *OpenAIAccountOrderingHook) SnapshotMetrics() OpenAIPriorityDrainMetrics
 		return OpenAIPriorityDrainMetricsSnapshot{}
 	}
 	return OpenAIPriorityDrainMetricsSnapshot{
-		OAuthPreferredTotal:             h.metrics.oauthPreferredTotal.Load(),
-		OAuthFullFallbackTotal:          h.metrics.oauthFullFallbackTotal.Load(),
-		OAuthUnschedulableFallbackTotal: h.metrics.oauthUnschedulableFallbackTotal.Load(),
-		APIKeyCooldownTotal:             h.metrics.apiKeyCooldownTotal.Load(),
-		APIKeyAllCooledFallbackTotal:    h.metrics.apiKeyAllCooledFallbackTotal.Load(),
-		APIKeyRecoveredTotal:            h.metrics.apiKeyRecoveredTotal.Load(),
-		RedisFallbackTotal:              h.metrics.redisFallbackTotal.Load(),
+		OAuthPreferredTotal:                    h.metrics.oauthPreferredTotal.Load(),
+		OAuthFullFallbackTotal:                 h.metrics.oauthFullFallbackTotal.Load(),
+		OAuthUnschedulableFallbackTotal:        h.metrics.oauthUnschedulableFallbackTotal.Load(),
+		APIKeyCooldownTotal:                    h.metrics.apiKeyCooldownTotal.Load(),
+		APIKeyAllCooledFallbackTotal:           h.metrics.apiKeyAllCooledFallbackTotal.Load(),
+		APIKeyRecoveredTotal:                   h.metrics.apiKeyRecoveredTotal.Load(),
+		CooldownStickyEscapeTotal:              h.metrics.cooldownStickyEscapeTotal.Load(),
+		CooldownPreviousResponseMovedTotal:     h.metrics.cooldownPreviousMovedTotal.Load(),
+		CooldownPreviousResponsePreservedTotal: h.metrics.cooldownPreviousPreservedTotal.Load(),
+		RedisFallbackTotal:                     h.metrics.redisFallbackTotal.Load(),
 	}
 }
 
 type OpenAIPriorityDrainMetricsSnapshot struct {
-	OAuthPreferredTotal             int64 `json:"oauth_preferred_total"`
-	OAuthFullFallbackTotal          int64 `json:"oauth_full_fallback_total"`
-	OAuthUnschedulableFallbackTotal int64 `json:"oauth_unschedulable_fallback_total"`
-	APIKeyCooldownTotal             int64 `json:"api_key_cooldown_total"`
-	APIKeyAllCooledFallbackTotal    int64 `json:"api_key_all_cooled_fallback_total"`
-	APIKeyRecoveredTotal            int64 `json:"api_key_recovered_total"`
-	RedisFallbackTotal              int64 `json:"redis_fallback_total"`
+	OAuthPreferredTotal                    int64 `json:"oauth_preferred_total"`
+	OAuthFullFallbackTotal                 int64 `json:"oauth_full_fallback_total"`
+	OAuthUnschedulableFallbackTotal        int64 `json:"oauth_unschedulable_fallback_total"`
+	APIKeyCooldownTotal                    int64 `json:"api_key_cooldown_total"`
+	APIKeyAllCooledFallbackTotal           int64 `json:"api_key_all_cooled_fallback_total"`
+	APIKeyRecoveredTotal                   int64 `json:"api_key_recovered_total"`
+	CooldownStickyEscapeTotal              int64 `json:"cooldown_sticky_escape_total"`
+	CooldownPreviousResponseMovedTotal     int64 `json:"cooldown_previous_response_moved_total"`
+	CooldownPreviousResponsePreservedTotal int64 `json:"cooldown_previous_response_preserved_total"`
+	RedisFallbackTotal                     int64 `json:"redis_fallback_total"`
 }
