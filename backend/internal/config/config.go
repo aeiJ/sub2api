@@ -2433,11 +2433,11 @@ func setDefaults() {
 // then silently dropped. Deployments driven purely by env — which is what
 // deploy/docker-compose.yml does — got the zero value with no warning.
 //
-// The values below are deliberately zero rather than the documented example
+// Most values below are deliberately zero rather than the documented example
 // values: an absent key already unmarshalled to the zero value, so registering
 // zero keeps behavior identical while making the key addressable from the
-// environment. Any subsystem that wants a richer default still applies it after
-// unmarshal, exactly as before.
+// environment. Keys whose post-unmarshal fallback uses viper.IsSet must instead
+// register that fallback's effective value, so the default remains valid.
 func setEnvReachableDefaults() {
 	viper.SetDefault("gateway.forced_codex_instructions_template_file", "")
 	viper.SetDefault("gateway.session_idle_timeout_minutes", 0)
@@ -2452,6 +2452,12 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("gateway.openai_scheduler.sticky_escape_enabled", true)
 	viper.SetDefault("gateway.openai_scheduler.sticky_escape_error_rate", 0.0)
 	viper.SetDefault("gateway.openai_scheduler.sticky_escape_ttft_ms", 0)
+	viper.SetDefault("gateway.openai_scheduler.latency_degrade_ttft_ms", 8000)
+	viper.SetDefault("gateway.openai_scheduler.latency_recover_ttft_ms", 6000)
+	viper.SetDefault("gateway.openai_scheduler.latency_severe_ttft_ms", 20000)
+	viper.SetDefault("gateway.openai_scheduler.latency_min_samples", 3)
+	viper.SetDefault("gateway.openai_scheduler.latency_recovery_successes", 2)
+	viper.SetDefault("gateway.openai_scheduler.latency_severe_error_rate", 0.5)
 
 	// server.trusted_proxies and security.forwarded_client_ip_headers are the
 	// other exception: load() distinguishes explicit configuration from absence
