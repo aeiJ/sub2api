@@ -1,6 +1,6 @@
 <template>
   <!-- Custom Home Content: Full Page Mode -->
-  <div v-if="homeContent" class="min-h-screen">
+  <div v-if="hasHomeContent" class="min-h-screen">
     <!-- iframe mode -->
     <iframe
       v-if="isHomeContentUrl"
@@ -11,6 +11,19 @@
     <!-- HTML mode - SECURITY: homeContent is admin-only setting, XSS risk is acceptable -->
     <div v-else v-html="homeContent"></div>
   </div>
+
+	  <CompactHomePage
+	    v-else-if="compactHomeEnabled"
+	    :site-name="siteName"
+	    :site-logo="siteLogo"
+	    :site-subtitle="siteSubtitle"
+	    :doc-url="docUrl"
+	    :is-dark="isDark"
+	    :is-authenticated="isAuthenticated"
+	    :dashboard-path="dashboardPath"
+	    :current-year="currentYear"
+	    @toggle-theme="toggleTheme"
+	  />
 
 	  <!-- Default Home Page -->
 	  <div
@@ -453,6 +466,7 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
+import CompactHomePage from '@/components/home/CompactHomePage.vue'
 import { applyThemeClass } from '@/utils/theme'
 import { sanitizeUrl } from '@/utils/url'
 
@@ -467,6 +481,8 @@ const siteLogo = computed(() => sanitizeUrl(appStore.cachedPublicSettings?.site_
 const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'AI API Gateway Platform')
 const docUrl = computed(() => sanitizeUrl(appStore.cachedPublicSettings?.doc_url || appStore.docUrl || ''))
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
+const hasHomeContent = computed(() => homeContent.value.trim().length > 0)
+const compactHomeEnabled = computed(() => appStore.cachedPublicSettings?.compact_home_enabled === true)
 
 // Check if homeContent is a URL (for iframe display)
 const isHomeContentUrl = computed(() => {
