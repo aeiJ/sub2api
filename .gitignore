@@ -150,3 +150,6 @@ output/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Vitest / Vite cache at repo root
+.vite/

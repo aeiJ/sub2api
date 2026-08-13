@@ -737,7 +737,7 @@ func TestNewAdminServiceExposesOpenAIAccountSchedulerMetrics(t *testing.T) {
 			RedisFallbackTotal: 3,
 		},
 	}}
-	admin := NewAdminService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, provider, nil, nil, nil)
+	admin := NewAdminService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, provider, nil, nil, nil, nil)
 
 	require.Equal(t, provider.snapshot, admin.GetOpenAIAccountSchedulerMetrics())
 }
