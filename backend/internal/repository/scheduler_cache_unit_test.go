@@ -33,6 +33,206 @@ func newSchedulerCacheUnitWithRedis(t *testing.T) (*schedulerCache, *miniredis.M
 	return cache, mr
 }
 
+func schedulerCachePriorityDrainPolicy(global, account string) service.OpenAIPriorityDrainTTFTPolicy {
+	return service.OpenAIPriorityDrainTTFTPolicy{GlobalFingerprint: global, AccountFingerprint: account}
+}
+
+func schedulerCachePriorityDrainPolicies(accountID int64, policy service.OpenAIPriorityDrainTTFTPolicy) map[int64]service.OpenAIPriorityDrainTTFTPolicy {
+	return map[int64]service.OpenAIPriorityDrainTTFTPolicy{accountID: policy}
+}
+
+func TestSchedulerCacheOpenAIPriorityDrainTTFTCooldownAndRecovery(t *testing.T) {
+	ctx := context.Background()
+	cache := newSchedulerCacheUnit(t)
+	policy := schedulerCachePriorityDrainPolicy("global-v1", "default")
+
+	first, err := cache.ObserveOpenAIPriorityDrainTTFT(ctx, 991, 11_000, 10_000, 2, time.Minute, time.Minute, policy)
+	require.NoError(t, err)
+	require.False(t, first.EnteredCooldown)
+
+	second, err := cache.ObserveOpenAIPriorityDrainTTFT(ctx, 991, 12_000, 10_000, 2, time.Minute, time.Minute, policy)
+	require.NoError(t, err)
+	require.True(t, second.EnteredCooldown)
+
+	states, err := cache.GetOpenAIPriorityDrainTTFTStates(ctx, schedulerCachePriorityDrainPolicies(991, policy))
+	require.NoError(t, err)
+	require.Equal(t, 2, states[991].SlowCount)
+	require.True(t, states[991].IsCoolingDown(time.Now()))
+
+	recovered, err := cache.ObserveOpenAIPriorityDrainTTFT(ctx, 991, 9_000, 10_000, 2, time.Minute, time.Minute, policy)
+	require.NoError(t, err)
+	require.True(t, recovered.Recovered)
+
+	states, err = cache.GetOpenAIPriorityDrainTTFTStates(ctx, schedulerCachePriorityDrainPolicies(991, policy))
+	require.NoError(t, err)
+	require.Equal(t, int64(9_000), states[991].LastTTFTMs)
+	require.Zero(t, states[991].SlowCount)
+	require.Zero(t, states[991].CooldownUntilUnixMs)
+
+	require.NoError(t, cache.ClearOpenAIPriorityDrainTTFTStates(ctx, []int64{991}))
+	states, err = cache.GetOpenAIPriorityDrainTTFTStates(ctx, schedulerCachePriorityDrainPolicies(991, policy))
+	require.NoError(t, err)
+	_, exists := states[991]
+	require.False(t, exists)
+}
+
+func TestSchedulerCacheClearAllOpenAIPriorityDrainTTFTStates(t *testing.T) {
+	ctx := context.Background()
+	cache := newSchedulerCacheUnit(t)
+	require.NoError(t, cache.rdb.HSet(ctx, openAIPriorityDrainTTFTKey(1), "slow_count", 1).Err())
+	require.NoError(t, cache.rdb.HSet(ctx, openAIPriorityDrainTTFTKey(2), "slow_count", 2).Err())
+	require.NoError(t, cache.rdb.Set(ctx, "unrelated", "kept", time.Minute).Err())
+
+	require.NoError(t, cache.ClearAllOpenAIPriorityDrainTTFTStates(ctx))
+	require.Zero(t, cache.rdb.Exists(ctx, openAIPriorityDrainTTFTKey(1), openAIPriorityDrainTTFTKey(2)).Val())
+	require.Equal(t, "kept", cache.rdb.Get(ctx, "unrelated").Val())
+}
+
+func TestSchedulerCacheOpenAIPriorityDrainTTFTExpiredCooldownStartsFreshSequence(t *testing.T) {
+	ctx := context.Background()
+	cache := newSchedulerCacheUnit(t)
+	accountID := int64(992)
+	policy := schedulerCachePriorityDrainPolicy("global-v1", "default")
+	now := time.Now()
+	require.NoError(t, cache.rdb.HSet(ctx, openAIPriorityDrainTTFTKey(accountID), map[string]any{
+		"last_ttft_ms":      12_000,
+		"slow_count":        2,
+		"last_slow_at_ms":   now.Add(-10 * time.Second).UnixMilli(),
+		"cooldown_until_ms": now.Add(-time.Second).UnixMilli(),
+		"global_policy":     policy.GlobalFingerprint,
+		"account_policy":    policy.AccountFingerprint,
+	}).Err())
+	require.NoError(t, cache.FenceOpenAIPriorityDrainTTFTGlobalPolicy(ctx, policy.GlobalFingerprint))
+	require.NoError(t, cache.FenceOpenAIPriorityDrainTTFTAccountPolicies(ctx, map[int64]string{accountID: policy.AccountFingerprint}))
+
+	first, err := cache.ObserveOpenAIPriorityDrainTTFT(ctx, accountID, 11_000, 10_000, 2, time.Minute, time.Minute, policy)
+	require.NoError(t, err)
+	require.False(t, first.EnteredCooldown)
+
+	states, err := cache.GetOpenAIPriorityDrainTTFTStates(ctx, schedulerCachePriorityDrainPolicies(accountID, policy))
+	require.NoError(t, err)
+	require.Equal(t, 1, states[accountID].SlowCount)
+	require.Zero(t, states[accountID].CooldownUntilUnixMs)
+
+	second, err := cache.ObserveOpenAIPriorityDrainTTFT(ctx, accountID, 12_000, 10_000, 2, time.Minute, time.Minute, policy)
+	require.NoError(t, err)
+	require.True(t, second.EnteredCooldown)
+}
+
+func TestSchedulerCacheOpenAIPriorityDrainTTFTStatisticsWindowStartsFreshSequence(t *testing.T) {
+	ctx := context.Background()
+	cache := newSchedulerCacheUnit(t)
+	accountID := int64(993)
+	policy := schedulerCachePriorityDrainPolicy("global-v1", "default")
+	require.NoError(t, cache.rdb.HSet(ctx, openAIPriorityDrainTTFTKey(accountID), map[string]any{
+		"last_ttft_ms":      11_000,
+		"slow_count":        1,
+		"last_slow_at_ms":   time.Now().Add(-2 * time.Minute).UnixMilli(),
+		"cooldown_until_ms": 0,
+		"global_policy":     policy.GlobalFingerprint,
+		"account_policy":    policy.AccountFingerprint,
+	}).Err())
+	require.NoError(t, cache.FenceOpenAIPriorityDrainTTFTGlobalPolicy(ctx, policy.GlobalFingerprint))
+	require.NoError(t, cache.FenceOpenAIPriorityDrainTTFTAccountPolicies(ctx, map[int64]string{accountID: policy.AccountFingerprint}))
+
+	observation, err := cache.ObserveOpenAIPriorityDrainTTFT(ctx, accountID, 12_000, 10_000, 2, time.Minute, time.Minute, policy)
+	require.NoError(t, err)
+	require.False(t, observation.EnteredCooldown)
+
+	states, err := cache.GetOpenAIPriorityDrainTTFTStates(ctx, schedulerCachePriorityDrainPolicies(accountID, policy))
+	require.NoError(t, err)
+	require.Equal(t, 1, states[accountID].SlowCount)
+	require.Zero(t, states[accountID].CooldownUntilUnixMs)
+}
+
+func TestSchedulerCacheOpenAIPriorityDrainTTFTStatisticsWindowBoundsFullSequence(t *testing.T) {
+	ctx := context.Background()
+	cache := newSchedulerCacheUnit(t)
+	accountID := int64(996)
+	policy := schedulerCachePriorityDrainPolicy("global-v1", "default")
+	base := time.Now().Truncate(time.Millisecond)
+	window := 4 * time.Minute
+
+	first, err := cache.observeOpenAIPriorityDrainTTFTAt(ctx, accountID, 11_000, 10_000, 3, window, time.Minute, policy, base)
+	require.NoError(t, err)
+	require.False(t, first.EnteredCooldown)
+
+	second, err := cache.observeOpenAIPriorityDrainTTFTAt(ctx, accountID, 12_000, 10_000, 3, window, time.Minute, policy, base.Add(3*time.Minute+59*time.Second))
+	require.NoError(t, err)
+	require.False(t, second.EnteredCooldown)
+
+	third, err := cache.observeOpenAIPriorityDrainTTFTAt(ctx, accountID, 13_000, 10_000, 3, window, time.Minute, policy, base.Add(7*time.Minute+58*time.Second))
+	require.NoError(t, err)
+	require.False(t, third.EnteredCooldown)
+
+	states, err := cache.GetOpenAIPriorityDrainTTFTStates(ctx, schedulerCachePriorityDrainPolicies(accountID, policy))
+	require.NoError(t, err)
+	require.Equal(t, 1, states[accountID].SlowCount)
+	require.Zero(t, states[accountID].CooldownUntilUnixMs)
+}
+
+func TestSchedulerCacheOpenAIPriorityDrainTTFTStatisticsWindowIncludesExactBoundary(t *testing.T) {
+	ctx := context.Background()
+	cache := newSchedulerCacheUnit(t)
+	accountID := int64(997)
+	policy := schedulerCachePriorityDrainPolicy("global-v1", "default")
+	base := time.Now().Truncate(time.Millisecond)
+	window := 4 * time.Minute
+
+	_, err := cache.observeOpenAIPriorityDrainTTFTAt(ctx, accountID, 11_000, 10_000, 3, window, time.Minute, policy, base)
+	require.NoError(t, err)
+	_, err = cache.observeOpenAIPriorityDrainTTFTAt(ctx, accountID, 12_000, 10_000, 3, window, time.Minute, policy, base.Add(time.Minute))
+	require.NoError(t, err)
+	third, err := cache.observeOpenAIPriorityDrainTTFTAt(ctx, accountID, 13_000, 10_000, 3, window, time.Minute, policy, base.Add(window))
+	require.NoError(t, err)
+	require.True(t, third.EnteredCooldown)
+
+	states, err := cache.GetOpenAIPriorityDrainTTFTStates(ctx, schedulerCachePriorityDrainPolicies(accountID, policy))
+	require.NoError(t, err)
+	require.Equal(t, 3, states[accountID].SlowCount)
+	require.Equal(t, base.Add(window+time.Minute).UnixMilli(), states[accountID].CooldownUntilUnixMs)
+}
+
+func TestSchedulerCacheOpenAIPriorityDrainTTFTGlobalFenceRejectsStaleWriter(t *testing.T) {
+	ctx := context.Background()
+	cache := newSchedulerCacheUnit(t)
+	accountID := int64(994)
+	oldPolicy := schedulerCachePriorityDrainPolicy("global-v1", "default")
+	newPolicy := schedulerCachePriorityDrainPolicy("global-v2", "default")
+
+	_, err := cache.ObserveOpenAIPriorityDrainTTFT(ctx, accountID, 20_000, 10_000, 2, time.Minute, time.Minute, oldPolicy)
+	require.NoError(t, err)
+	require.NoError(t, cache.FenceOpenAIPriorityDrainTTFTGlobalPolicy(ctx, newPolicy.GlobalFingerprint))
+	require.NoError(t, cache.ClearAllOpenAIPriorityDrainTTFTStates(ctx))
+
+	stale, err := cache.ObserveOpenAIPriorityDrainTTFT(ctx, accountID, 21_000, 10_000, 2, time.Minute, time.Minute, oldPolicy)
+	require.NoError(t, err)
+	require.True(t, stale.IgnoredStalePolicy)
+	states, err := cache.GetOpenAIPriorityDrainTTFTStates(ctx, schedulerCachePriorityDrainPolicies(accountID, newPolicy))
+	require.NoError(t, err)
+	require.Empty(t, states)
+}
+
+func TestSchedulerCacheOpenAIPriorityDrainTTFTAccountFenceRejectsStaleWriter(t *testing.T) {
+	ctx := context.Background()
+	cache := newSchedulerCacheUnit(t)
+	accountID := int64(995)
+	oldPolicy := schedulerCachePriorityDrainPolicy("global-v1", "threshold=15")
+	newPolicy := schedulerCachePriorityDrainPolicy("global-v1", "threshold=10")
+
+	_, err := cache.ObserveOpenAIPriorityDrainTTFT(ctx, accountID, 20_000, 15_000, 2, time.Minute, time.Minute, oldPolicy)
+	require.NoError(t, err)
+	require.NoError(t, cache.FenceOpenAIPriorityDrainTTFTAccountPolicies(ctx, map[int64]string{accountID: newPolicy.AccountFingerprint}))
+	require.NoError(t, cache.ClearOpenAIPriorityDrainTTFTStates(ctx, []int64{accountID}))
+
+	stale, err := cache.ObserveOpenAIPriorityDrainTTFT(ctx, accountID, 21_000, 15_000, 2, time.Minute, time.Minute, oldPolicy)
+	require.NoError(t, err)
+	require.True(t, stale.IgnoredStalePolicy)
+	states, err := cache.GetOpenAIPriorityDrainTTFTStates(ctx, schedulerCachePriorityDrainPolicies(accountID, newPolicy))
+	require.NoError(t, err)
+	require.Empty(t, states)
+}
+
 func TestSchedulerCacheWriteAccountIDsSkipsUnencodableTimes(t *testing.T) {
 	ctx := context.Background()
 	cache := newSchedulerCacheUnit(t)
@@ -326,6 +526,23 @@ func TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags(t *testing.T) {
 	require.Equal(t, "session", got.Extra["codex_fingerprint_mode"])
 	require.Equal(t, "11111111-1111-4111-8111-111111111111", got.Extra["codex_fingerprint_seed"])
 	require.Equal(t, true, got.Extra["mixed_scheduling"])
+	require.Nil(t, got.Extra["unused_large_field"])
+}
+
+func TestBuildSchedulerMetadataAccount_KeepsOpenAIPriorityDrainTTFTThreshold(t *testing.T) {
+	account := service.Account{
+		ID:       43,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeAPIKey,
+		Extra: map[string]any{
+			service.OpenAIPriorityDrainTTFTThresholdExtraKey: 10,
+			"unused_large_field":                             "drop-me",
+		},
+	}
+
+	got := buildSchedulerMetadataAccount(account)
+
+	require.Equal(t, 10, got.Extra[service.OpenAIPriorityDrainTTFTThresholdExtraKey])
 	require.Nil(t, got.Extra["unused_large_field"])
 }
 

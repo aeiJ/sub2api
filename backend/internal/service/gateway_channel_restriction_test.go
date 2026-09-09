@@ -255,7 +255,7 @@ func TestIsUpstreamModelRestrictedByChannel_Restricted(t *testing.T) {
 	account := &Account{Platform: PlatformAntigravity}
 	// claude-sonnet-4-6 在 DefaultAntigravityModelMapping 中，映射后仍为 claude-sonnet-4-6
 	// 但定价列表只有 claude-opus-4-6
-	require.True(t, svc.isUpstreamModelRestrictedByChannel(context.Background(), 10, account, "claude-sonnet-4-6"),
+	require.True(t, svc.isAccountMappedModelRestrictedByChannel(context.Background(), 10, account, "claude-sonnet-4-6"),
 		"upstream model claude-sonnet-4-6 NOT in pricing → restricted")
 }
 
@@ -274,7 +274,7 @@ func TestIsUpstreamModelRestrictedByChannel_Allowed(t *testing.T) {
 	svc := &GatewayService{channelService: channelSvc}
 
 	account := &Account{Platform: PlatformAntigravity}
-	require.False(t, svc.isUpstreamModelRestrictedByChannel(context.Background(), 10, account, "claude-sonnet-4-6"),
+	require.False(t, svc.isAccountMappedModelRestrictedByChannel(context.Background(), 10, account, "claude-sonnet-4-6"),
 		"upstream model claude-sonnet-4-6 IS in pricing → allowed")
 }
 
@@ -294,6 +294,6 @@ func TestIsUpstreamModelRestrictedByChannel_UnsupportedModel(t *testing.T) {
 
 	account := &Account{Platform: PlatformAntigravity}
 	// totally-unknown-model 不在 DefaultAntigravityModelMapping 中 → 映射结果为空
-	require.False(t, svc.isUpstreamModelRestrictedByChannel(context.Background(), 10, account, "totally-unknown-model"),
+	require.False(t, svc.isAccountMappedModelRestrictedByChannel(context.Background(), 10, account, "totally-unknown-model"),
 		"unmappable model → upstream model empty → not restricted (account filter handles this)")
 }

@@ -23,6 +23,9 @@ type ScheduledTestRunnerService struct {
 	cron      *cron.Cron
 	startOnce sync.Once
 	stopOnce  sync.Once
+
+	inFlightMu sync.Mutex
+	inFlight   map[int64]struct{}
 }
 
 // NewScheduledTestRunnerService creates a new runner.
@@ -39,6 +42,7 @@ func NewScheduledTestRunnerService(
 		accountTestSvc: accountTestSvc,
 		rateLimitSvc:   rateLimitSvc,
 		cfg:            cfg,
+		inFlight:       make(map[int64]struct{}),
 	}
 }
 
@@ -107,11 +111,18 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 	var wg sync.WaitGroup
 
 	for _, plan := range plans {
+		if !s.tryAcquireInFlight(plan.ID) {
+			logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d skipped (already in-flight)", plan.ID)
+			continue
+		}
 		sem <- struct{}{}
 		wg.Add(1)
 		go func(p *ScheduledTestPlan) {
 			defer wg.Done()
-			defer func() { <-sem }()
+			defer func() {
+				s.releaseInFlight(p.ID)
+				<-sem
+			}()
 			s.runOnePlan(ctx, p)
 		}(plan)
 	}
@@ -119,8 +130,33 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 	wg.Wait()
 }
 
+func (s *ScheduledTestRunnerService) tryAcquireInFlight(planID int64) bool {
+	if planID <= 0 {
+		return true
+	}
+	s.inFlightMu.Lock()
+	defer s.inFlightMu.Unlock()
+	if s.inFlight == nil {
+		s.inFlight = make(map[int64]struct{})
+	}
+	if _, exists := s.inFlight[planID]; exists {
+		return false
+	}
+	s.inFlight[planID] = struct{}{}
+	return true
+}
+
+func (s *ScheduledTestRunnerService) releaseInFlight(planID int64) {
+	if planID <= 0 {
+		return
+	}
+	s.inFlightMu.Lock()
+	defer s.inFlightMu.Unlock()
+	delete(s.inFlight, planID)
+}
+
 func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *ScheduledTestPlan) {
-	result, err := s.accountTestSvc.RunTestBackground(ctx, plan.AccountID, plan.ModelID)
+	result, err := s.runPlanTest(ctx, plan)
 	if err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d RunTestBackground error: %v", plan.ID, err)
 		return
@@ -135,7 +171,7 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 		s.tryRecoverAccount(ctx, plan.AccountID, plan.ID)
 	}
 
-	nextRun, err := computeNextRun(plan.CronExpression, time.Now())
+	nextRun, err := computeScheduledTestNextRun(plan, time.Now())
 	if err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d computeNextRun error: %v", plan.ID, err)
 		return
@@ -144,6 +180,10 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 	if err := s.planRepo.UpdateAfterRun(ctx, plan.ID, time.Now(), nextRun); err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d UpdateAfterRun error: %v", plan.ID, err)
 	}
+}
+
+func (s *ScheduledTestRunnerService) runPlanTest(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestResult, error) {
+	return s.accountTestSvc.RunTestBackground(ctx, plan.AccountID, plan.ModelID)
 }
 
 // tryRecoverAccount attempts to recover an account from recoverable runtime state.

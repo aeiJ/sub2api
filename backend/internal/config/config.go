@@ -1371,6 +1371,18 @@ type GatewayOpenAISchedulerConfig struct {
 	StickyEscapeTTFTMs int `mapstructure:"sticky_escape_ttft_ms"`
 	// StickyEscapeErrorRate: 错误率 EWMA 超过该阈值时跳过 sticky
 	StickyEscapeErrorRate float64 `mapstructure:"sticky_escape_error_rate"`
+	// LatencyDegradeTTFTMs: TTFT EWMA 达到该阈值后对新会话软降权
+	LatencyDegradeTTFTMs int `mapstructure:"latency_degrade_ttft_ms"`
+	// LatencyRecoverTTFTMs: TTFT EWMA 降至该阈值并连续成功后恢复正常权重
+	LatencyRecoverTTFTMs int `mapstructure:"latency_recover_ttft_ms"`
+	// LatencySevereTTFTMs: TTFT EWMA 达到该阈值后允许 sticky 逃逸
+	LatencySevereTTFTMs int `mapstructure:"latency_severe_ttft_ms"`
+	// LatencyMinSamples: 延迟状态生效前需要的最小样本数
+	LatencyMinSamples int `mapstructure:"latency_min_samples"`
+	// LatencyRecoverySuccesses: 从降权状态恢复正常需要的连续成功次数
+	LatencyRecoverySuccesses int `mapstructure:"latency_recovery_successes"`
+	// LatencySevereErrorRate: 错误率 EWMA 超过该阈值时判定为严重状态
+	LatencySevereErrorRate float64 `mapstructure:"latency_severe_error_rate"`
 }
 
 // GatewayUsageRecordConfig 使用量记录异步队列配置
@@ -1827,6 +1839,24 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	}
 	if cfg.Gateway.OpenAIScheduler.StickyEscapeErrorRate == 0 {
 		cfg.Gateway.OpenAIScheduler.StickyEscapeErrorRate = 0.5
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs == 0 && !viper.IsSet("gateway.openai_scheduler.latency_degrade_ttft_ms") {
+		cfg.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs = 8000
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs == 0 && !viper.IsSet("gateway.openai_scheduler.latency_recover_ttft_ms") {
+		cfg.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs = 6000
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencySevereTTFTMs == 0 && !viper.IsSet("gateway.openai_scheduler.latency_severe_ttft_ms") {
+		cfg.Gateway.OpenAIScheduler.LatencySevereTTFTMs = 20000
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencyMinSamples == 0 && !viper.IsSet("gateway.openai_scheduler.latency_min_samples") {
+		cfg.Gateway.OpenAIScheduler.LatencyMinSamples = 3
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencyRecoverySuccesses == 0 && !viper.IsSet("gateway.openai_scheduler.latency_recovery_successes") {
+		cfg.Gateway.OpenAIScheduler.LatencyRecoverySuccesses = 2
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencySevereErrorRate == 0 && !viper.IsSet("gateway.openai_scheduler.latency_severe_error_rate") {
+		cfg.Gateway.OpenAIScheduler.LatencySevereErrorRate = 0.5
 	}
 	// Kept as a backstop: setEnvReachableDefaults now registers this key with its
 	// effective default (true), so IsSet always reports true and this branch no
@@ -2576,11 +2606,11 @@ func setDefaults() {
 // then silently dropped. Deployments driven purely by env — which is what
 // deploy/docker-compose.yml does — got the zero value with no warning.
 //
-// The values below are deliberately zero rather than the documented example
+// Most values below are deliberately zero rather than the documented example
 // values: an absent key already unmarshalled to the zero value, so registering
 // zero keeps behavior identical while making the key addressable from the
-// environment. Any subsystem that wants a richer default still applies it after
-// unmarshal, exactly as before.
+// environment. Keys whose post-unmarshal fallback uses viper.IsSet must instead
+// register that fallback's effective value, so the default remains valid.
 func setEnvReachableDefaults() {
 	viper.SetDefault("gateway.forced_codex_instructions_template_file", "")
 	viper.SetDefault("gateway.session_idle_timeout_minutes", 0)
@@ -2595,6 +2625,12 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("gateway.openai_scheduler.sticky_escape_enabled", true)
 	viper.SetDefault("gateway.openai_scheduler.sticky_escape_error_rate", 0.0)
 	viper.SetDefault("gateway.openai_scheduler.sticky_escape_ttft_ms", 0)
+	viper.SetDefault("gateway.openai_scheduler.latency_degrade_ttft_ms", 8000)
+	viper.SetDefault("gateway.openai_scheduler.latency_recover_ttft_ms", 6000)
+	viper.SetDefault("gateway.openai_scheduler.latency_severe_ttft_ms", 20000)
+	viper.SetDefault("gateway.openai_scheduler.latency_min_samples", 3)
+	viper.SetDefault("gateway.openai_scheduler.latency_recovery_successes", 2)
+	viper.SetDefault("gateway.openai_scheduler.latency_severe_error_rate", 0.5)
 
 	// server.trusted_proxies and security.forwarded_client_ip_headers are the
 	// other exception: load() distinguishes explicit configuration from absence
@@ -3545,6 +3581,36 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIScheduler.StickyEscapeErrorRate < 0 || c.Gateway.OpenAIScheduler.StickyEscapeErrorRate > 1 {
 		return fmt.Errorf("gateway.openai_scheduler.sticky_escape_error_rate must be between 0 and 1")
+	}
+	if c.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs <= 0 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_degrade_ttft_ms must be positive")
+	}
+	if c.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs <= 0 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_recover_ttft_ms must be positive")
+	}
+	if c.Gateway.OpenAIScheduler.LatencySevereTTFTMs <= 0 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_severe_ttft_ms must be positive")
+	}
+	if c.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs >= c.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs {
+		return fmt.Errorf("gateway.openai_scheduler.latency_recover_ttft_ms must be less than latency_degrade_ttft_ms")
+	}
+	if c.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs-c.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs < 1000 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_degrade_ttft_ms and latency_recover_ttft_ms must have at least 1000ms gap for hysteresis")
+	}
+	if c.Gateway.OpenAIScheduler.LatencySevereTTFTMs < c.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs {
+		return fmt.Errorf("gateway.openai_scheduler.latency_severe_ttft_ms must be greater than or equal to latency_degrade_ttft_ms")
+	}
+	if c.Gateway.OpenAIScheduler.LatencyMinSamples <= 0 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_min_samples must be positive")
+	}
+	if c.Gateway.OpenAIScheduler.LatencyMinSamples > 100 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_min_samples must not exceed 100")
+	}
+	if c.Gateway.OpenAIScheduler.LatencyRecoverySuccesses <= 0 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_recovery_successes must be positive")
+	}
+	if c.Gateway.OpenAIScheduler.LatencySevereErrorRate <= 0 || c.Gateway.OpenAIScheduler.LatencySevereErrorRate > 1 {
+		return fmt.Errorf("gateway.openai_scheduler.latency_severe_error_rate must be greater than 0 and less than or equal to 1")
 	}
 	if c.Gateway.MaxLineSize < 0 {
 		return fmt.Errorf("gateway.max_line_size must be non-negative")

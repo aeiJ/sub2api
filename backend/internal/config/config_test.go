@@ -470,6 +470,24 @@ func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	if cfg.Gateway.OpenAIScheduler.StickyEscapeErrorRate != 0.5 {
 		t.Fatalf("Gateway.OpenAIScheduler.StickyEscapeErrorRate = %v, want 0.5", cfg.Gateway.OpenAIScheduler.StickyEscapeErrorRate)
 	}
+	if cfg.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs != 8000 {
+		t.Fatalf("Gateway.OpenAIScheduler.LatencyDegradeTTFTMs = %d, want 8000", cfg.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs)
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs != 6000 {
+		t.Fatalf("Gateway.OpenAIScheduler.LatencyRecoverTTFTMs = %d, want 6000", cfg.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs)
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencySevereTTFTMs != 20000 {
+		t.Fatalf("Gateway.OpenAIScheduler.LatencySevereTTFTMs = %d, want 20000", cfg.Gateway.OpenAIScheduler.LatencySevereTTFTMs)
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencyMinSamples != 3 {
+		t.Fatalf("Gateway.OpenAIScheduler.LatencyMinSamples = %d, want 3", cfg.Gateway.OpenAIScheduler.LatencyMinSamples)
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencyRecoverySuccesses != 2 {
+		t.Fatalf("Gateway.OpenAIScheduler.LatencyRecoverySuccesses = %d, want 2", cfg.Gateway.OpenAIScheduler.LatencyRecoverySuccesses)
+	}
+	if cfg.Gateway.OpenAIScheduler.LatencySevereErrorRate != 0.5 {
+		t.Fatalf("Gateway.OpenAIScheduler.LatencySevereErrorRate = %v, want 0.5", cfg.Gateway.OpenAIScheduler.LatencySevereErrorRate)
+	}
 	if !cfg.Gateway.OpenAIWS.SessionHashReadOldFallback {
 		t.Fatalf("Gateway.OpenAIWS.SessionHashReadOldFallback = false, want true")
 	}
@@ -2395,6 +2413,63 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 			name:    "sticky_escape_error_rate 不能大于 1",
 			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.StickyEscapeErrorRate = 1.1 },
 			wantErr: "gateway.openai_scheduler.sticky_escape_error_rate",
+		},
+		{
+			name:    "latency_degrade_ttft_ms 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs = 0 },
+			wantErr: "gateway.openai_scheduler.latency_degrade_ttft_ms",
+		},
+		{
+			name:    "latency_recover_ttft_ms 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs = 0 },
+			wantErr: "gateway.openai_scheduler.latency_recover_ttft_ms",
+		},
+		{
+			name: "latency_recover_ttft_ms 必须小于 latency_degrade_ttft_ms",
+			mutate: func(c *Config) {
+				c.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs = c.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs
+			},
+			wantErr: "gateway.openai_scheduler.latency_recover_ttft_ms",
+		},
+		{
+			name: "latency_recover 和 latency_degrade 之间必须有至少 1000ms 的滞后间隔",
+			mutate: func(c *Config) {
+				c.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs = 8000
+				c.Gateway.OpenAIScheduler.LatencyRecoverTTFTMs = 7500
+			},
+			wantErr: "hysteresis",
+		},
+		{
+			name: "latency_severe_ttft_ms 不能低于 latency_degrade_ttft_ms",
+			mutate: func(c *Config) {
+				c.Gateway.OpenAIScheduler.LatencySevereTTFTMs = c.Gateway.OpenAIScheduler.LatencyDegradeTTFTMs - 1
+			},
+			wantErr: "gateway.openai_scheduler.latency_severe_ttft_ms",
+		},
+		{
+			name:    "latency_min_samples 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.LatencyMinSamples = 0 },
+			wantErr: "gateway.openai_scheduler.latency_min_samples",
+		},
+		{
+			name:    "latency_min_samples 不能超过 100",
+			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.LatencyMinSamples = 101 },
+			wantErr: "gateway.openai_scheduler.latency_min_samples",
+		},
+		{
+			name:    "latency_recovery_successes 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.LatencyRecoverySuccesses = 0 },
+			wantErr: "gateway.openai_scheduler.latency_recovery_successes",
+		},
+		{
+			name:    "latency_severe_error_rate 必须在 0 和 1 之间",
+			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.LatencySevereErrorRate = 1.5 },
+			wantErr: "gateway.openai_scheduler.latency_severe_error_rate",
+		},
+		{
+			name:    "latency_severe_error_rate 不能为 0",
+			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.LatencySevereErrorRate = 0 },
+			wantErr: "gateway.openai_scheduler.latency_severe_error_rate",
 		},
 	}
 

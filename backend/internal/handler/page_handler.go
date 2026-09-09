@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
-	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -241,7 +241,7 @@ func (h *PageHandler) checkSlugVisibility(c *gin.Context, slug string) bool {
 		return false
 	}
 	if visibility == "admin" {
-		role, _ := middleware2.GetUserRoleFromContext(c)
+		role, _ := middleware.GetUserRoleFromContext(c)
 		return role == "admin"
 	}
 	return true
@@ -277,7 +277,6 @@ func RegisterPageRoutes(v1 *gin.RouterGroup, dataDir string, jwtAuth gin.Handler
 	// Admin-only: list all available pages
 	adminPages := v1.Group("/pages")
 	adminPages.Use(adminAuth)
-	adminPages.Use(middleware2.AdminComplianceGuard(settingService))
 	{
 		adminPages.GET("", h.ListPages)
 	}

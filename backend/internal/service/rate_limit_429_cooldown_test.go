@@ -61,7 +61,7 @@ func TestSetRateLimit429CooldownSettings_EnabledRejectsOutOfRange(t *testing.T) 
 	}
 }
 
-func TestHandle429_FallbackUsesDBSeconds(t *testing.T) {
+func TestHandle429_OpenAINoResetUsesFiveHourCooldown(t *testing.T) {
 	accountRepo := &rateLimit429AccountRepoStub{}
 	settingRepo := newMockSettingRepo()
 	data, _ := json.Marshal(RateLimit429CooldownSettings{Enabled: true, CooldownSeconds: 12})
@@ -78,7 +78,7 @@ func TestHandle429_FallbackUsesDBSeconds(t *testing.T) {
 
 	require.Equal(t, 1, accountRepo.rateLimitCalls)
 	require.Equal(t, int64(42), accountRepo.lastRateLimitID)
-	require.True(t, !accountRepo.lastRateLimitReset.Before(before.Add(12*time.Second)) && !accountRepo.lastRateLimitReset.After(after.Add(12*time.Second)))
+	require.True(t, !accountRepo.lastRateLimitReset.Before(before.Add(5*time.Hour)) && !accountRepo.lastRateLimitReset.After(after.Add(5*time.Hour)))
 }
 
 func TestHandle429_FallbackDisabledSkipsLocalMark(t *testing.T) {
@@ -91,10 +91,30 @@ func TestHandle429_FallbackDisabledSkipsLocalMark(t *testing.T) {
 	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
 	svc.SetSettingService(settingSvc)
 
-	account := &Account{ID: 43, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	account := &Account{ID: 43, Platform: PlatformGemini, Type: AccountTypeAPIKey}
 	svc.handle429(context.Background(), account, http.Header{}, []byte(`{"error":{"type":"rate_limit_error","message":"slow down"}}`))
 
 	require.Zero(t, accountRepo.rateLimitCalls)
+}
+
+func TestHandle429_GeminiFallbackUsesDBSeconds(t *testing.T) {
+	accountRepo := &rateLimit429AccountRepoStub{}
+	settingRepo := newMockSettingRepo()
+	data, _ := json.Marshal(RateLimit429CooldownSettings{Enabled: true, CooldownSeconds: 12})
+	settingRepo.data[SettingKeyRateLimit429CooldownSettings] = string(data)
+
+	settingSvc := NewSettingService(settingRepo, &config.Config{})
+	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	svc.SetSettingService(settingSvc)
+
+	account := &Account{ID: 47, Platform: PlatformGemini, Type: AccountTypeAPIKey}
+	before := time.Now()
+	svc.handle429(context.Background(), account, http.Header{}, []byte(`{"error":{"message":"slow down"}}`))
+	after := time.Now()
+
+	require.Equal(t, 1, accountRepo.rateLimitCalls)
+	require.Equal(t, int64(47), accountRepo.lastRateLimitID)
+	require.True(t, !accountRepo.lastRateLimitReset.Before(before.Add(12*time.Second)) && !accountRepo.lastRateLimitReset.After(after.Add(12*time.Second)))
 }
 
 // Anthropic 无 reset 头的 429（如 Extra usage required）也应走兜底冷却，

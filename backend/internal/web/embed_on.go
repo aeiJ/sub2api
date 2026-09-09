@@ -89,10 +89,11 @@ func (s *FrontendServer) Middleware() gin.HandlerFunc {
 		path := c.Request.URL.Path
 
 		// Skip API routes
-		if shouldBypassEmbeddedFrontend(path) {
+		if shouldBypassEmbeddedFrontendRequest(c.Request) {
 			c.Next()
 			return
 		}
+		prepareEmbeddedFrontendResponse(c)
 
 		cleanPath := strings.TrimPrefix(path, "/")
 		if cleanPath == "" {
@@ -160,7 +161,7 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 		content := replaceNoncePlaceholder(cached.Content, nonce)
 
 		c.Header("ETag", cached.ETag)
-		c.Header("Cache-Control", "no-cache") // Must revalidate
+		applyHTMLCacheControl(c)
 		c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 		c.Abort()
 		return
@@ -196,7 +197,7 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 	if cached != nil {
 		c.Header("ETag", cached.ETag)
 	}
-	c.Header("Cache-Control", "no-cache")
+	applyHTMLCacheControl(c)
 	c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 	c.Abort()
 }
@@ -311,10 +312,11 @@ func ServeEmbeddedFrontend() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
 
-		if shouldBypassEmbeddedFrontend(path) {
+		if shouldBypassEmbeddedFrontendRequest(c.Request) {
 			c.Next()
 			return
 		}
+		prepareEmbeddedFrontendResponse(c)
 
 		cleanPath := strings.TrimPrefix(path, "/")
 		if cleanPath == "" {
@@ -367,6 +369,48 @@ func shouldBypassEmbeddedFrontend(path string) bool {
 		trimmed == "/alpha/search" ||
 		strings.HasPrefix(trimmed, "/images/") ||
 		strings.HasPrefix(trimmed, "/videos/")
+}
+
+func shouldBypassEmbeddedFrontendRequest(req *http.Request) bool {
+	path := strings.TrimSpace(req.URL.Path)
+	if isModelMarketplaceRequest(req) {
+		return false
+	}
+	return shouldBypassEmbeddedFrontend(path)
+}
+
+func isModelMarketplaceRequest(req *http.Request) bool {
+	return strings.TrimSpace(req.URL.Path) == "/models" && acceptsHTML(req.Header.Get("Accept"))
+}
+
+func acceptsHTML(accept string) bool {
+	for _, value := range strings.Split(accept, ",") {
+		mediaType := strings.TrimSpace(strings.SplitN(value, ";", 2)[0])
+		if mediaType == "text/html" || mediaType == "application/xhtml+xml" {
+			return true
+		}
+	}
+	return false
+}
+
+func prepareEmbeddedFrontendResponse(c *gin.Context) {
+	if !isModelMarketplaceRequest(c.Request) {
+		return
+	}
+
+	// /models is also an authenticated API route, so a cached SPA response must
+	// never be reused for non-HTML requests sharing the same URL.
+	c.Header("Cache-Control", "no-store")
+	c.Header("Vary", "Accept")
+	c.Header("X-Accel-Expires", "0")
+}
+
+func applyHTMLCacheControl(c *gin.Context) {
+	if isModelMarketplaceRequest(c.Request) {
+		c.Header("Cache-Control", "no-store")
+		return
+	}
+	c.Header("Cache-Control", "no-cache")
 }
 
 func serveIndexHTML(c *gin.Context, fsys fs.FS) {

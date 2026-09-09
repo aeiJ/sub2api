@@ -1148,6 +1148,28 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 					MaxWaiting:     cfg.StickySessionMaxWaiting,
 				})
 			}
+
+			// The sticky account is full and its wait queue is saturated. Re-enter
+			// normal selection with that account excluded so a healthy peer can
+			// serve the request instead of extending an already-full queue.
+			fallbackExcludedIDs := make(map[int64]struct{}, len(excludedIDs)+1)
+			for id := range excludedIDs {
+				fallbackExcludedIDs[id] = struct{}{}
+			}
+			fallbackExcludedIDs[account.ID] = struct{}{}
+			fallback, fallbackErr := s.selectAccountForModelWithExclusions(ctx, groupID, platform, sessionHash, requestedModel, fallbackExcludedIDs, requireCompact, 0, requiredCapability, preferLowUpstreamRate)
+			if fallbackErr == nil && fallback != nil {
+				fallbackResult, acquireErr := s.tryAcquireAccountSlot(ctx, fallback.ID, fallback.Concurrency)
+				if acquireErr == nil && fallbackResult != nil && fallbackResult.Acquired {
+					return s.newAcquiredSelectionResult(ctx, fallback, fallbackResult.ReleaseFunc)
+				}
+				return s.newSelectionResult(ctx, fallback, false, nil, &AccountWaitPlan{
+					AccountID:      fallback.ID,
+					MaxConcurrency: fallback.Concurrency,
+					Timeout:        cfg.FallbackWaitTimeout,
+					MaxWaiting:     cfg.FallbackMaxWaiting,
+				})
+			}
 		}
 		return s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
 			AccountID:      account.ID,

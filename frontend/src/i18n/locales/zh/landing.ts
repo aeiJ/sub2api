@@ -12,6 +12,7 @@ export default {
     switchToDark: '切换到深色模式',
     dashboard: '控制台',
     login: '登录',
+    modelMarketplace: '模型广场',
     getStarted: '立即开始',
     goToDashboard: '进入控制台',
     // 新增：面向用户的价值主张
@@ -111,6 +112,68 @@ export default {
     },
     footer: {
       allRightsReserved: '保留所有权利。'
+    }
+  },
+
+  modelMarketplace: {
+    title: '模型广场',
+    publicCatalog: '公开模型目录',
+    subtitle: '查看当前可调度账号支持的模型、公开分组与按最低公开倍率计算后的参考价格。',
+    searchPlaceholder: '搜索模型、供应商或分组',
+    resultCount: '共 {count} 个模型',
+    gridView: '卡片',
+    copyModel: '复制模型名',
+    copyFailed: '复制失败，请手动复制模型名',
+    defaultDescription: '当前公开分组可用的 AI 模型。',
+    emptyTitle: '没有可展示的模型',
+    emptyDescription: '请调整搜索或筛选条件，或稍后再查看。',
+    errorTitle: '模型广场加载失败',
+    errorMessage: '暂时无法获取模型广场数据',
+    retry: '重试',
+    rate: '最低倍率 {rate}',
+    summary: {
+      models: '模型',
+      providers: '供应商',
+      minRate: '最低倍率'
+    },
+    filters: {
+      title: '筛选',
+      active: '{count} 项已选',
+      close: '关闭筛选',
+      reset: '重置',
+      none: '暂无选项',
+      providers: '供应商',
+      groups: '公开分组',
+      billingModes: '计费类型',
+      tags: '标签',
+      platforms: '端点类型'
+    },
+    pricing: {
+      input: '输入 Input',
+      output: '输出 Output',
+      cacheWrite: '缓存写入 Cache write',
+      cacheRead: '缓存读取 Cached input',
+      imageOutput: '图片输出 Image output',
+      perRequest: '按次请求',
+      formula: '按官网基础价 × 公开分组最低倍率 {rate} 计算',
+      units: {
+        perMillionTokens: '折后价 / 1M tokens',
+        perMillionImageTokens: '折后价 / 1M image tokens',
+        perRequest: '折后价 / request'
+      }
+    },
+    billingModes: {
+      token: 'Token',
+      image: '图片',
+      per_request: '按次'
+    },
+    tags: {
+      reasoning: '推理',
+      tools: '工具',
+      vision: '视觉',
+      files: '文件',
+      image: '图像',
+      context: '长上下文'
     }
   },
 

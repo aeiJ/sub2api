@@ -475,8 +475,8 @@ const form = reactive({
   platforms: [] as string[],
   passthrough_code: true,
   response_code: null as number | null,
-  passthrough_body: true,
-  custom_message: null as string | null,
+  passthrough_body: false,
+  custom_message: 'Upstream request failed' as string | null,
   skip_monitoring: false,
   description: null as string | null
 })
@@ -515,8 +515,8 @@ const resetForm = () => {
   form.platforms = []
   form.passthrough_code = true
   form.response_code = null
-  form.passthrough_body = true
-  form.custom_message = null
+  form.passthrough_body = false
+  form.custom_message = 'Upstream request failed'
   form.skip_monitoring = false
   form.description = null
   errorCodesInput.value = ''

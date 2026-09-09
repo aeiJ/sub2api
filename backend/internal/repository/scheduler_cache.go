@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -15,18 +16,22 @@ import (
 )
 
 const (
-	schedulerBucketSetKey          = "sched:buckets"
-	schedulerOutboxWatermarkKey    = "sched:outbox:watermark"
-	schedulerAccountPrefix         = "sched:acc:"
-	schedulerAccountMetaPrefix     = "sched:meta:"
-	schedulerAccountLastUsedPrefix = "sched:acc:last_used:"
-	schedulerActivePrefix          = "sched:active:"
-	schedulerReadyPrefix           = "sched:ready:"
-	schedulerVersionPrefix         = "sched:ver:"
-	schedulerEpochPrefix           = "sched:epoch:"
-	schedulerRetiredPrefix         = "sched:retired:"
-	schedulerSnapshotPrefix        = "sched:"
-	schedulerLockPrefix            = "sched:lock:"
+	schedulerBucketSetKey                  = "sched:buckets"
+	schedulerOutboxWatermarkKey            = "sched:outbox:watermark"
+	schedulerAccountPrefix                 = "sched:acc:"
+	schedulerAccountMetaPrefix             = "sched:meta:"
+	schedulerAccountLastUsedPrefix         = "sched:acc:last_used:"
+	schedulerActivePrefix                  = "sched:active:"
+	schedulerReadyPrefix                   = "sched:ready:"
+	schedulerVersionPrefix                 = "sched:ver:"
+	schedulerEpochPrefix                   = "sched:epoch:"
+	schedulerRetiredPrefix                 = "sched:retired:"
+	schedulerSnapshotPrefix                = "sched:"
+	schedulerLockPrefix                    = "sched:lock:"
+	schedulerDrainTargetPrefix             = "sched:drain:"
+	openAIPriorityDrainTTFTPrefix          = "sched:openai:priority-drain:ttft:"
+	openAIPriorityDrainGlobalPolicyKey     = "sched:openai:priority-drain:ttft-policy:global"
+	openAIPriorityDrainAccountPolicyPrefix = "sched:openai:priority-drain:ttft-policy:account:"
 
 	defaultSchedulerSnapshotMGetChunkSize  = 128
 	defaultSchedulerSnapshotWriteChunkSize = 256
@@ -59,6 +64,83 @@ for index = 1, #ARGV do
     end
 end
 return updated
+`)
+
+var observeOpenAIPriorityDrainTTFTScript = redis.NewScript(`
+local now = tonumber(ARGV[1])
+local ttft = tonumber(ARGV[2])
+local threshold = tonumber(ARGV[3])
+local required = tonumber(ARGV[4])
+local window = tonumber(ARGV[5])
+local cooldown = tonumber(ARGV[6])
+local ttl = tonumber(ARGV[7])
+local expected_global_policy = ARGV[8]
+local expected_account_policy = ARGV[9]
+
+if now == nil or ttft == nil or threshold == nil or required == nil or window == nil or cooldown == nil or ttl == nil or expected_global_policy == '' or expected_account_policy == '' then
+    return redis.error_reply('invalid priority drain ttft arguments')
+end
+
+local current_global_policy = redis.call('GET', KEYS[2])
+if current_global_policy == false then
+    redis.call('SET', KEYS[2], expected_global_policy)
+elseif current_global_policy ~= expected_global_policy then
+    return 3
+end
+
+local current_account_policy = redis.call('GET', KEYS[3])
+if current_account_policy == false then
+    redis.call('SET', KEYS[3], expected_account_policy)
+elseif current_account_policy ~= expected_account_policy then
+    return 3
+end
+
+local state_global_policy = redis.call('HGET', KEYS[1], 'global_policy')
+local state_account_policy = redis.call('HGET', KEYS[1], 'account_policy')
+if state_global_policy ~= expected_global_policy or state_account_policy ~= expected_account_policy then
+    redis.call('DEL', KEYS[1])
+end
+
+if ttft <= threshold then
+    local hadSlowState = redis.call('HGET', KEYS[1], 'slow_count')
+    local hadCooldown = redis.call('HGET', KEYS[1], 'cooldown_until_ms')
+    redis.call('HSET', KEYS[1], 'last_ttft_ms', ttft, 'slow_count', 0, 'first_slow_at_ms', 0, 'last_slow_at_ms', 0, 'cooldown_until_ms', 0, 'global_policy', expected_global_policy, 'account_policy', expected_account_policy)
+    redis.call('PEXPIRE', KEYS[1], ttl)
+    if (tonumber(hadSlowState) or 0) > 0 or (tonumber(hadCooldown) or 0) > now then
+        return 2
+    end
+    return 0
+end
+
+local previousSlowAt = tonumber(redis.call('HGET', KEYS[1], 'last_slow_at_ms')) or 0
+local previousCount = tonumber(redis.call('HGET', KEYS[1], 'slow_count')) or 0
+local firstSlowAt = tonumber(redis.call('HGET', KEYS[1], 'first_slow_at_ms')) or previousSlowAt
+local cooldownUntil = tonumber(redis.call('HGET', KEYS[1], 'cooldown_until_ms')) or 0
+if cooldownUntil > 0 and cooldownUntil <= now then
+    previousSlowAt = 0
+    previousCount = 0
+    firstSlowAt = 0
+    cooldownUntil = 0
+end
+local nextCount = 1
+local nextFirstSlowAt = now
+if previousCount > 0 and firstSlowAt > 0 and now - firstSlowAt <= window then
+    nextCount = previousCount + 1
+    nextFirstSlowAt = firstSlowAt
+end
+
+local enteredCooldown = 0
+if nextCount >= required then
+    local nextCooldownUntil = now + cooldown
+    if cooldownUntil <= now then
+        enteredCooldown = 1
+    end
+    cooldownUntil = nextCooldownUntil
+end
+
+redis.call('HSET', KEYS[1], 'last_ttft_ms', ttft, 'slow_count', nextCount, 'first_slow_at_ms', nextFirstSlowAt, 'last_slow_at_ms', now, 'cooldown_until_ms', cooldownUntil, 'global_policy', expected_global_policy, 'account_policy', expected_account_policy)
+redis.call('PEXPIRE', KEYS[1], ttl)
+return enteredCooldown
 `)
 
 var (
@@ -216,7 +298,40 @@ if currentActive ~= false and currentActive ~= ARGV[1] then
 end
 
 return 1
-`)
+	`)
+
+	claimDrainTargetScript = redis.NewScript(`
+local current = redis.call('GET', KEYS[1])
+
+if current == false or current == ARGV[1] then
+	redis.call('SET', KEYS[1], ARGV[1])
+	return 1
+end
+
+return 0
+	`)
+
+	advanceDrainTargetScript = redis.NewScript(`
+local current = redis.call('GET', KEYS[1])
+
+if current ~= ARGV[1] then
+	return 0
+end
+
+redis.call('SET', KEYS[1], ARGV[2])
+return 1
+	`)
+
+	clearDrainTargetScript = redis.NewScript(`
+local current = redis.call('GET', KEYS[1])
+
+if current ~= ARGV[1] then
+	return 0
+end
+
+redis.call('DEL', KEYS[1])
+return 1
+	`)
 )
 
 type schedulerCache struct {
@@ -681,6 +796,255 @@ func (c *schedulerCache) ListBuckets(ctx context.Context) ([]service.SchedulerBu
 	return out, nil
 }
 
+func (c *schedulerCache) GetDrainTarget(ctx context.Context, bucket service.SchedulerDrainTargetBucket) (int64, bool, error) {
+	val, err := c.rdb.Get(ctx, schedulerDrainTargetKey(bucket)).Result()
+	if err == redis.Nil {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+
+	accountID, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return 0, false, err
+	}
+	if accountID <= 0 {
+		return 0, false, fmt.Errorf("invalid scheduler drain target account id: %d", accountID)
+	}
+	return accountID, true, nil
+}
+
+func (c *schedulerCache) TryClaimDrainTarget(ctx context.Context, bucket service.SchedulerDrainTargetBucket, accountID int64) (bool, error) {
+	if accountID <= 0 {
+		return false, nil
+	}
+
+	result, err := claimDrainTargetScript.Run(
+		ctx,
+		c.rdb,
+		[]string{schedulerDrainTargetKey(bucket)},
+		strconv.FormatInt(accountID, 10),
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (c *schedulerCache) AdvanceDrainTarget(ctx context.Context, bucket service.SchedulerDrainTargetBucket, expectedAccountID, nextAccountID int64) (bool, error) {
+	if expectedAccountID <= 0 || nextAccountID <= 0 {
+		return false, nil
+	}
+
+	result, err := advanceDrainTargetScript.Run(
+		ctx,
+		c.rdb,
+		[]string{schedulerDrainTargetKey(bucket)},
+		strconv.FormatInt(expectedAccountID, 10),
+		strconv.FormatInt(nextAccountID, 10),
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (c *schedulerCache) ClearDrainTarget(ctx context.Context, bucket service.SchedulerDrainTargetBucket, expectedAccountID int64) (bool, error) {
+	if expectedAccountID <= 0 {
+		return false, nil
+	}
+
+	result, err := clearDrainTargetScript.Run(
+		ctx,
+		c.rdb,
+		[]string{schedulerDrainTargetKey(bucket)},
+		strconv.FormatInt(expectedAccountID, 10),
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (c *schedulerCache) GetOpenAIPriorityDrainTTFTStates(ctx context.Context, policies map[int64]service.OpenAIPriorityDrainTTFTPolicy) (map[int64]service.OpenAIPriorityDrainTTFTState, error) {
+	states := make(map[int64]service.OpenAIPriorityDrainTTFTState, len(policies))
+	if len(policies) == 0 {
+		return states, nil
+	}
+	pipe := c.rdb.Pipeline()
+	policyKeys := []string{openAIPriorityDrainGlobalPolicyKey}
+	accountIDs := make([]int64, 0, len(policies))
+	commands := make(map[int64]*redis.MapStringStringCmd, len(policies))
+	for accountID := range policies {
+		if accountID <= 0 {
+			continue
+		}
+		accountIDs = append(accountIDs, accountID)
+		policyKeys = append(policyKeys, openAIPriorityDrainAccountPolicyKey(accountID))
+		commands[accountID] = pipe.HGetAll(ctx, openAIPriorityDrainTTFTKey(accountID))
+	}
+	policyCommand := pipe.MGet(ctx, policyKeys...)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+	policyValues, err := policyCommand.Result()
+	if err != nil {
+		return nil, err
+	}
+	currentGlobalPolicy := openAIPriorityDrainStringValue(policyValues, 0)
+	for index, accountID := range accountIDs {
+		expected := policies[accountID]
+		if currentGlobalPolicy != "" && currentGlobalPolicy != expected.GlobalFingerprint {
+			continue
+		}
+		currentAccountPolicy := openAIPriorityDrainStringValue(policyValues, index+1)
+		if currentAccountPolicy != "" && currentAccountPolicy != expected.AccountFingerprint {
+			continue
+		}
+		command := commands[accountID]
+		values, err := command.Result()
+		if err != nil {
+			return nil, err
+		}
+		if len(values) == 0 {
+			continue
+		}
+		if values["global_policy"] != expected.GlobalFingerprint || values["account_policy"] != expected.AccountFingerprint {
+			continue
+		}
+		states[accountID] = service.OpenAIPriorityDrainTTFTState{
+			LastTTFTMs:          parseOpenAIPriorityDrainInt64(values["last_ttft_ms"]),
+			SlowCount:           int(parseOpenAIPriorityDrainInt64(values["slow_count"])),
+			CooldownUntilUnixMs: parseOpenAIPriorityDrainInt64(values["cooldown_until_ms"]),
+		}
+	}
+	return states, nil
+}
+
+func (c *schedulerCache) ObserveOpenAIPriorityDrainTTFT(ctx context.Context, accountID, ttftMs, thresholdMs int64, slowCount int, window, cooldown time.Duration, policy service.OpenAIPriorityDrainTTFTPolicy) (service.OpenAIPriorityDrainTTFTObservation, error) {
+	return c.observeOpenAIPriorityDrainTTFTAt(ctx, accountID, ttftMs, thresholdMs, slowCount, window, cooldown, policy, time.Now())
+}
+
+func (c *schedulerCache) observeOpenAIPriorityDrainTTFTAt(ctx context.Context, accountID, ttftMs, thresholdMs int64, slowCount int, window, cooldown time.Duration, policy service.OpenAIPriorityDrainTTFTPolicy, observedAt time.Time) (service.OpenAIPriorityDrainTTFTObservation, error) {
+	if accountID <= 0 || ttftMs < 0 || thresholdMs <= 0 || slowCount <= 0 || window <= 0 || cooldown <= 0 || policy.GlobalFingerprint == "" || policy.AccountFingerprint == "" {
+		return service.OpenAIPriorityDrainTTFTObservation{}, nil
+	}
+	windowMs := window.Milliseconds()
+	cooldownMs := cooldown.Milliseconds()
+	ttlMs := 2 * windowMs
+	if cooldownMs > ttlMs {
+		ttlMs = 2 * cooldownMs
+	}
+	result, err := observeOpenAIPriorityDrainTTFTScript.Run(
+		ctx,
+		c.rdb,
+		[]string{
+			openAIPriorityDrainTTFTKey(accountID),
+			openAIPriorityDrainGlobalPolicyKey,
+			openAIPriorityDrainAccountPolicyKey(accountID),
+		},
+		observedAt.UnixMilli(),
+		ttftMs,
+		thresholdMs,
+		slowCount,
+		windowMs,
+		cooldownMs,
+		ttlMs,
+		policy.GlobalFingerprint,
+		policy.AccountFingerprint,
+	).Int64()
+	if err != nil {
+		return service.OpenAIPriorityDrainTTFTObservation{}, err
+	}
+	return service.OpenAIPriorityDrainTTFTObservation{
+		EnteredCooldown:    result == 1,
+		Recovered:          result == 2,
+		IgnoredStalePolicy: result == 3,
+	}, nil
+}
+
+func (c *schedulerCache) FenceOpenAIPriorityDrainTTFTGlobalPolicy(ctx context.Context, fingerprint string) error {
+	if strings.TrimSpace(fingerprint) == "" {
+		return nil
+	}
+	return c.rdb.Set(ctx, openAIPriorityDrainGlobalPolicyKey, fingerprint, 0).Err()
+}
+
+func (c *schedulerCache) FenceOpenAIPriorityDrainTTFTAccountPolicies(ctx context.Context, fingerprints map[int64]string) error {
+	if len(fingerprints) == 0 {
+		return nil
+	}
+	pipe := c.rdb.TxPipeline()
+	for accountID, fingerprint := range fingerprints {
+		if accountID <= 0 || strings.TrimSpace(fingerprint) == "" {
+			continue
+		}
+		pipe.Set(ctx, openAIPriorityDrainAccountPolicyKey(accountID), fingerprint, 0)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (c *schedulerCache) ClearOpenAIPriorityDrainTTFTStates(ctx context.Context, accountIDs []int64) error {
+	keys := make([]string, 0, len(accountIDs))
+	for _, accountID := range accountIDs {
+		if accountID > 0 {
+			keys = append(keys, openAIPriorityDrainTTFTKey(accountID))
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	return c.rdb.Del(ctx, keys...).Err()
+}
+
+func (c *schedulerCache) ClearAllOpenAIPriorityDrainTTFTStates(ctx context.Context) error {
+	keys := make([]string, 0)
+	var cursor uint64
+	for {
+		batch, next, err := c.rdb.Scan(ctx, cursor, openAIPriorityDrainTTFTPrefix+"*", 500).Result()
+		if err != nil {
+			return err
+		}
+		keys = append(keys, batch...)
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	for start := 0; start < len(keys); start += 500 {
+		end := start + 500
+		if end > len(keys) {
+			end = len(keys)
+		}
+		if err := c.rdb.Del(ctx, keys[start:end]...).Err(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func openAIPriorityDrainTTFTKey(accountID int64) string {
+	return openAIPriorityDrainTTFTPrefix + strconv.FormatInt(accountID, 10)
+}
+
+func openAIPriorityDrainAccountPolicyKey(accountID int64) string {
+	return openAIPriorityDrainAccountPolicyPrefix + strconv.FormatInt(accountID, 10)
+}
+
+func openAIPriorityDrainStringValue(values []any, index int) string {
+	if index < 0 || index >= len(values) || values[index] == nil {
+		return ""
+	}
+	return fmt.Sprint(values[index])
+}
+
+func parseOpenAIPriorityDrainInt64(raw string) int64 {
+	value, _ := strconv.ParseInt(raw, 10, 64)
+	return value
+}
+
 func (c *schedulerCache) GetOutboxWatermark(ctx context.Context) (int64, error) {
 	val, err := c.rdb.Get(ctx, schedulerOutboxWatermarkKey).Result()
 	if err == redis.Nil {
@@ -710,6 +1074,10 @@ func schedulerGroupLifecycleLockKey(groupID int64) string {
 
 func schedulerSnapshotKey(bucket service.SchedulerBucket, version string) string {
 	return fmt.Sprintf("%s%d:%s:%s:v%s", schedulerSnapshotPrefix, bucket.GroupID, bucket.Platform, bucket.Mode, version)
+}
+
+func schedulerDrainTargetKey(bucket service.SchedulerDrainTargetBucket) string {
+	return schedulerDrainTargetPrefix + bucket.String()
 }
 
 func schedulerAccountKey(id string) string {
@@ -1021,6 +1389,7 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		"auto_pause_5h_disabled",
 		"auto_pause_7d_disabled",
 		"model_rate_limits",
+		service.OpenAIPriorityDrainTTFTThresholdExtraKey,
 		service.UpstreamBillingProbeExtraKey,
 		service.GrokMediaEligibleExtraKey,
 		"grok_billing_snapshot",

@@ -250,6 +250,11 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		openAIAdvancedSchedulerSettingKey:                            "false",
 		SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled:       "false",
 		SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled: "false",
+		SettingKeyOpenAIPriorityDrainEnabled:                         "false",
+		SettingKeyOpenAIPriorityDrainTTFTThresholdSeconds:            "15",
+		SettingKeyOpenAIPriorityDrainConsecutiveSlowCount:            "2",
+		SettingKeyOpenAIPriorityDrainStatisticsWindowSeconds:         "900",
+		SettingKeyOpenAIPriorityDrainSoftCooldownSeconds:             "900",
 		SettingKeyOpenAIAdvancedSchedulerLBTopK:                      "",
 		SettingKeyOpenAIAdvancedSchedulerWeightPriority:              "",
 		SettingKeyOpenAIAdvancedSchedulerWeightLoad:                  "",
@@ -913,6 +918,11 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.OpenAIAdvancedSchedulerEnabled = settings[openAIAdvancedSchedulerSettingKey] == "true"
 	result.OpenAIAdvancedSchedulerStickyWeightedEnabled = settings[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled] == "true"
 	result.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled = settings[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled] == "true"
+	result.OpenAIPriorityDrainEnabled = settings[SettingKeyOpenAIPriorityDrainEnabled] == "true"
+	result.OpenAIPriorityDrainTTFTThresholdSeconds = parseOpenAIPriorityDrainSettingInt(settings[SettingKeyOpenAIPriorityDrainTTFTThresholdSeconds], defaultOpenAIPriorityDrainTTFTThreshold, 1, 120)
+	result.OpenAIPriorityDrainConsecutiveSlowCount = parseOpenAIPriorityDrainSettingInt(settings[SettingKeyOpenAIPriorityDrainConsecutiveSlowCount], defaultOpenAIPriorityDrainSlowCount, 1, 10)
+	result.OpenAIPriorityDrainStatisticsWindowSeconds = parseOpenAIPriorityDrainSettingInt(settings[SettingKeyOpenAIPriorityDrainStatisticsWindowSeconds], int(defaultOpenAIPriorityDrainWindow.Seconds()), 1, 86400)
+	result.OpenAIPriorityDrainSoftCooldownSeconds = parseOpenAIPriorityDrainSettingInt(settings[SettingKeyOpenAIPriorityDrainSoftCooldownSeconds], int(defaultOpenAIPriorityDrainCooldown.Seconds()), 1, 86400)
 	result.OpenAIAdvancedSchedulerLBTopK = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerLBTopK])
 	result.OpenAIAdvancedSchedulerWeightPriority = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightPriority])
 	result.OpenAIAdvancedSchedulerWeightLoad = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightLoad])
@@ -1074,6 +1084,36 @@ func formatOpenAIAdvancedSchedulerFloat(value float64) string {
 }
 
 func (s *SettingService) normalizeOpenAIAdvancedSchedulerOverrides(settings *SystemSettings) error {
+	if settings.OpenAIPriorityDrainEnabled && !settings.OpenAIAdvancedSchedulerEnabled {
+		return infraerrors.BadRequest("OPENAI_PRIORITY_DRAIN_REQUIRES_ADVANCED_SCHEDULER", "openai priority drain requires the advanced scheduler")
+	}
+	// SystemSettings uses value fields. A zero value therefore represents an
+	// omitted priority-drain override in internal callers and older clients;
+	// normalize it to the persisted defaults before validating explicit input.
+	if settings.OpenAIPriorityDrainTTFTThresholdSeconds == 0 {
+		settings.OpenAIPriorityDrainTTFTThresholdSeconds = defaultOpenAIPriorityDrainTTFTThreshold
+	}
+	if settings.OpenAIPriorityDrainConsecutiveSlowCount == 0 {
+		settings.OpenAIPriorityDrainConsecutiveSlowCount = defaultOpenAIPriorityDrainSlowCount
+	}
+	if settings.OpenAIPriorityDrainStatisticsWindowSeconds == 0 {
+		settings.OpenAIPriorityDrainStatisticsWindowSeconds = int(defaultOpenAIPriorityDrainWindow.Seconds())
+	}
+	if settings.OpenAIPriorityDrainSoftCooldownSeconds == 0 {
+		settings.OpenAIPriorityDrainSoftCooldownSeconds = int(defaultOpenAIPriorityDrainCooldown.Seconds())
+	}
+	if settings.OpenAIPriorityDrainTTFTThresholdSeconds < 1 || settings.OpenAIPriorityDrainTTFTThresholdSeconds > 120 {
+		return infraerrors.BadRequest("INVALID_OPENAI_PRIORITY_DRAIN_TTFT_THRESHOLD", "openai priority drain TTFT threshold must be between 1 and 120 seconds")
+	}
+	if settings.OpenAIPriorityDrainConsecutiveSlowCount < 1 || settings.OpenAIPriorityDrainConsecutiveSlowCount > 10 {
+		return infraerrors.BadRequest("INVALID_OPENAI_PRIORITY_DRAIN_CONSECUTIVE_SLOW_COUNT", "openai priority drain consecutive slow count must be between 1 and 10")
+	}
+	if settings.OpenAIPriorityDrainStatisticsWindowSeconds < 1 || settings.OpenAIPriorityDrainStatisticsWindowSeconds > 86400 {
+		return infraerrors.BadRequest("INVALID_OPENAI_PRIORITY_DRAIN_STATISTICS_WINDOW", "openai priority drain statistics window must be between 1 and 86400 seconds")
+	}
+	if settings.OpenAIPriorityDrainSoftCooldownSeconds < 1 || settings.OpenAIPriorityDrainSoftCooldownSeconds > 86400 {
+		return infraerrors.BadRequest("INVALID_OPENAI_PRIORITY_DRAIN_SOFT_COOLDOWN", "openai priority drain soft cooldown must be between 1 and 86400 seconds")
+	}
 	if rate := settings.OpenAIOAuthSchedulingRateMultiplier; rate < 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
 		return infraerrors.BadRequest("INVALID_OPENAI_OAUTH_SCHEDULING_RATE_MULTIPLIER", "OpenAI OAuth scheduling rate multiplier must be a finite non-negative number")
 	}
@@ -1124,6 +1164,14 @@ func (s *SettingService) normalizeOpenAIAdvancedSchedulerOverrides(settings *Sys
 		return infraerrors.BadRequest("INVALID_OPENAI_ADVANCED_SCHEDULER_WEIGHT", "openai advanced scheduler weights must have finite non-zero base and total sums")
 	}
 	return nil
+}
+
+func parseOpenAIPriorityDrainSettingInt(raw string, fallback, min, max int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || value < min || value > max {
+		return fallback
+	}
+	return value
 }
 
 func parseOpenAIOAuthSchedulingRateMultiplier(raw string) float64 {

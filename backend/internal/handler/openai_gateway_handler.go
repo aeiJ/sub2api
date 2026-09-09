@@ -2186,6 +2186,11 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 		}
 		account = latest
 		selection.Account = latest
+		if !commitAccountWaitPlanAfterAcquire(ctx, reqLog, selection.WaitPlan, account.ID, fastReleaseFunc) {
+			markOpsRoutingCapacityLimited(c)
+			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", *streamStarted)
+			return nil, openAISlotAcquireFailed
+		}
 		if err := h.gatewayService.BindStickySessionAfterProfitAdmission(ctx, groupID, sessionHash, account.ID); err != nil {
 			reqLog.Warn("openai.bind_sticky_session_after_profit_admission_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		}
@@ -2242,10 +2247,31 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	}
 	account = latest
 	selection.Account = latest
+	if !commitAccountWaitPlanAfterAcquire(ctx, reqLog, selection.WaitPlan, account.ID, accountReleaseFunc) {
+		markOpsRoutingCapacityLimited(c)
+		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", *streamStarted)
+		return nil, openAISlotAcquireFailed
+	}
 	if err := h.gatewayService.BindStickySessionAfterProfitAdmission(ctx, groupID, sessionHash, account.ID); err != nil {
 		reqLog.Warn("openai.bind_sticky_session_after_profit_admission_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 	}
 	return wrapReleaseOnDone(ctx, accountReleaseFunc), openAISlotAcquireOK
+}
+
+func commitAccountWaitPlanAfterAcquire(ctx context.Context, reqLog *zap.Logger, waitPlan *service.AccountWaitPlan, accountID int64, release func()) bool {
+	if waitPlan == nil || waitPlan.CommitAfterAcquire == nil {
+		return true
+	}
+	if waitPlan.CommitAfterAcquire(ctx) {
+		return true
+	}
+	if release != nil {
+		release()
+	}
+	if reqLog != nil {
+		reqLog.Warn("account_wait_plan_commit_failed", zap.Int64("account_id", accountID))
+	}
+	return false
 }
 
 // ResponsesWebSocket handles OpenAI Responses API WebSocket ingress endpoint
@@ -2696,6 +2722,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			}
 			account = latest
 			selection.Account = latest
+			if !commitAccountWaitPlanAfterAcquire(admissionCtx, reqLog, selection.WaitPlan, account.ID, fastReleaseFunc) {
+				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "account is busy, please retry later")
+				return
+			}
 			accountReleaseFunc = fastReleaseFunc
 		}
 		// 准入完成：门并入连接 ctx，turn 级复核与 failover 重选共用。

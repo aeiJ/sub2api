@@ -493,6 +493,16 @@ type OpenAIGatewayService struct {
 	openaiCodexTurnStateWrites  atomic.Uint64
 }
 
+// OpenAIPriorityDrainTTFTStateStore exposes the optional scheduler cache state
+// to administrative bulk edits so account-level threshold changes can start
+// accumulating from a clean slate.
+func (s *OpenAIGatewayService) OpenAIPriorityDrainTTFTStateStore() OpenAIPriorityDrainTTFTStateStore {
+	if s == nil || s.schedulerSnapshot == nil {
+		return nil
+	}
+	return s.schedulerSnapshot.OpenAIPriorityDrainTTFTStateStore()
+}
+
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
 func NewOpenAIGatewayService(
 	accountRepo AccountRepository,
@@ -623,7 +633,7 @@ func (s *OpenAIGatewayService) checkChannelPricingRestriction(ctx context.Contex
 	return s.channelService.IsModelRestricted(ctx, *groupID, billingModel)
 }
 
-func (s *OpenAIGatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context, groupID int64, account *Account, requestedModel string, requireCompact bool) bool {
+func (s *OpenAIGatewayService) isAccountMappedModelRestrictedByChannel(ctx context.Context, groupID int64, account *Account, requestedModel string, requireCompact bool) bool {
 	if s.channelService == nil {
 		return false
 	}
@@ -638,7 +648,7 @@ func (s *OpenAIGatewayService) isUpstreamModelRestrictedByChannel(ctx context.Co
 	return s.channelService.IsModelRestricted(ctx, groupID, upstreamModel)
 }
 
-func (s *OpenAIGatewayService) needsUpstreamChannelRestrictionCheck(ctx context.Context, groupID *int64) bool {
+func (s *OpenAIGatewayService) needsUpstreamModelRestrictionCheck(ctx context.Context, groupID *int64) bool {
 	if groupID == nil || s.channelService == nil {
 		return false
 	}
@@ -651,6 +661,18 @@ func (s *OpenAIGatewayService) needsUpstreamChannelRestrictionCheck(ctx context.
 		return false
 	}
 	return ch.BillingModelSource == BillingModelSourceUpstream
+}
+
+// isUpstreamModelRestrictedByChannel preserves the scheduler-facing name used
+// by the account selection path while delegating to the current implementation.
+func (s *OpenAIGatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context, groupID int64, account *Account, requestedModel string, requireCompact bool) bool {
+	return s.isAccountMappedModelRestrictedByChannel(ctx, groupID, account, requestedModel, requireCompact)
+}
+
+// needsUpstreamChannelRestrictionCheck preserves the scheduler-facing name
+// used by the account selection path.
+func (s *OpenAIGatewayService) needsUpstreamChannelRestrictionCheck(ctx context.Context, groupID *int64) bool {
+	return s.needsUpstreamModelRestrictionCheck(ctx, groupID)
 }
 
 // ReplaceModelInBody 替换请求体中的 JSON model 字段（通用 gjson/sjson 实现）。

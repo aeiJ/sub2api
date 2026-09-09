@@ -781,6 +781,44 @@
             aria-labelledby="bulk-edit-priority-label"
           />
         </div>
+        <div v-if="allOpenAIAPIKey" class="sm:col-span-2">
+          <div class="mb-3 flex items-center justify-between">
+            <label
+              id="bulk-edit-openai-priority-drain-ttft-label"
+              class="input-label mb-0"
+              for="bulk-edit-openai-priority-drain-ttft-enabled"
+            >
+              {{ t('admin.accounts.priorityDrain.ttftThreshold') }}
+            </label>
+            <input
+              v-model="enableOpenAIPriorityDrainTTFTThreshold"
+              id="bulk-edit-openai-priority-drain-ttft-enabled"
+              type="checkbox"
+              class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+          </div>
+          <div class="flex flex-wrap items-center gap-3">
+            <input
+              v-model.number="openAIPriorityDrainTTFTThreshold"
+              id="bulk-edit-openai-priority-drain-ttft"
+              type="number"
+              min="1"
+              max="120"
+              :disabled="!enableOpenAIPriorityDrainTTFTThreshold || clearOpenAIPriorityDrainTTFTThreshold"
+              class="input w-32"
+            />
+            <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+              <input
+                v-model="clearOpenAIPriorityDrainTTFTThreshold"
+                type="checkbox"
+                :disabled="!enableOpenAIPriorityDrainTTFTThreshold"
+                class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              {{ t('admin.accounts.priorityDrain.restoreGlobalDefault') }}
+            </label>
+          </div>
+          <p class="input-hint">{{ t('admin.accounts.priorityDrain.ttftThresholdHint') }}</p>
+        </div>
         <div>
           <div class="mb-3 flex items-center justify-between">
             <label
@@ -1670,6 +1708,7 @@ const enableCodexCLIOnlyAppServer = ref(false)
 const enableOpenAICompactMode = ref(false)
 const enableOpenAICompactModelMapping = ref(false)
 const enableRpmLimit = ref(false)
+const enableOpenAIPriorityDrainTTFTThreshold = ref(false)
 
 // State - field values
 const submitting = ref(false)
@@ -1719,6 +1758,8 @@ const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAICompactModelMappings = ref<ModelMapping[]>([])
 const rpmLimitEnabled = ref(false)
 const bulkBaseRpm = ref<number | null>(null)
+const openAIPriorityDrainTTFTThreshold = ref(15)
+const clearOpenAIPriorityDrainTTFTThreshold = ref(false)
 const bulkRpmStrategy = ref<'tiered' | 'sticky_exempt'>('tiered')
 const bulkRpmStickyBuffer = ref<number | null>(null)
 const userMsgQueueMode = ref<string | null>(null)
@@ -1953,6 +1994,14 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
 
   if (enablePriority.value) {
     updates.priority = priority.value
+  }
+
+  if (enableOpenAIPriorityDrainTTFTThreshold.value) {
+    if (clearOpenAIPriorityDrainTTFTThreshold.value) {
+      updates.clear_openai_priority_drain_ttft_threshold = true
+    } else {
+      updates.openai_priority_drain_ttft_threshold_seconds = openAIPriorityDrainTTFTThreshold.value
+    }
   }
 
   if (enableRateMultiplier.value) {
@@ -2226,6 +2275,7 @@ const handleSubmit = async () => {
     enableOpenAICompactMode.value ||
     enableOpenAICompactModelMapping.value ||
     enableRpmLimit.value ||
+    enableOpenAIPriorityDrainTTFTThreshold.value ||
     userMsgQueueMode.value !== null
 
   if (!hasAnyFieldEnabled) {
@@ -2378,6 +2428,7 @@ watch(
       enableOpenAICompactMode.value = false
       enableOpenAICompactModelMapping.value = false
       enableRpmLimit.value = false
+      enableOpenAIPriorityDrainTTFTThreshold.value = false
 
       // Reset all values
       baseUrl.value = ''
@@ -2391,6 +2442,8 @@ watch(
       modelMappings.value = []
       selectedErrorCodes.value = []
       customErrorCodeInput.value = null
+      openAIPriorityDrainTTFTThreshold.value = 15
+      clearOpenAIPriorityDrainTTFTThreshold.value = false
       interceptWarmupRequests.value = false
       headerOverrideEnabled.value = false
       headerOverrideRows.value = []

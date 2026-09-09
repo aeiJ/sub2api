@@ -157,6 +157,19 @@ WHERE ns.nspname = 'public'
 	requireColumn(t, tx, "ops_system_logs", "api_key_id", "bigint", 0, true)
 	requireIndex(t, tx, "ops_system_logs", "idx_ops_system_logs_api_key_id_created_at")
 
+	// Retired upstream management tables should be removed by the latest migration.
+	for _, table := range []string{
+		"upstream_channels",
+		"upstream_platforms",
+		"upstream_key_pools",
+		"upstream_keys",
+		"upstream_sync_events",
+	} {
+		var regclass sql.NullString
+		require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass($1)", "public."+table).Scan(&regclass))
+		require.False(t, regclass.Valid, "expected %s table to be removed", table)
+	}
+
 	// Bounded ingress rejection security aggregates.
 	requireColumn(t, tx, "ops_ingress_reject_aggregates", "bucket_start", "timestamp with time zone", 0, false)
 	requireColumn(t, tx, "ops_ingress_reject_aggregates", "client_ip", "inet", 0, false)

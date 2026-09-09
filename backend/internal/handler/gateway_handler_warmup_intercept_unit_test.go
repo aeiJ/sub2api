@@ -72,6 +72,18 @@ func (f *fakeSchedulerCache) UnlockBucket(_ context.Context, _ service.Scheduler
 func (f *fakeSchedulerCache) ListBuckets(_ context.Context) ([]service.SchedulerBucket, error) {
 	return nil, nil
 }
+func (f *fakeSchedulerCache) GetDrainTarget(_ context.Context, _ service.SchedulerDrainTargetBucket) (int64, bool, error) {
+	return 0, false, nil
+}
+func (f *fakeSchedulerCache) TryClaimDrainTarget(_ context.Context, _ service.SchedulerDrainTargetBucket, _ int64) (bool, error) {
+	return false, nil
+}
+func (f *fakeSchedulerCache) AdvanceDrainTarget(_ context.Context, _ service.SchedulerDrainTargetBucket, _, _ int64) (bool, error) {
+	return false, nil
+}
+func (f *fakeSchedulerCache) ClearDrainTarget(_ context.Context, _ service.SchedulerDrainTargetBucket, _ int64) (bool, error) {
+	return false, nil
+}
 func (f *fakeSchedulerCache) GetOutboxWatermark(_ context.Context) (int64, error) { return 0, nil }
 func (f *fakeSchedulerCache) SetOutboxWatermark(_ context.Context, _ int64) error { return nil }
 
