@@ -1051,6 +1051,11 @@ export default {
       loadFactorHint: '提高负载因子可以提高对账号的调度频率',
       priority: '优先级',
       priorityHint: '优先级越小的账号优先使用',
+      priorityDrain: {
+        ttftThreshold: '优先额度消耗 TTFT 阈值（秒）',
+        ttftThresholdHint: '范围 1-120 秒。修改后会清空账号的慢速计数与冷却状态。',
+        restoreGlobalDefault: '恢复全局默认值'
+      },
       billingRateMultiplier: '账号计费倍率',
       billingRateMultiplierHint: '0 表示不计费，仅影响账号计费',
       expiresAt: '过期时间',

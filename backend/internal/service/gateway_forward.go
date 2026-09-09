@@ -1003,9 +1003,9 @@ func billingModelForRestriction(source, requestedModel, channelMappedModel strin
 	}
 }
 
-// isUpstreamModelRestrictedByChannel 检查账号映射后的上游模型是否受渠道定价限制。
+// isAccountMappedModelRestrictedByChannel 检查账号映射后的上游模型是否受渠道定价限制。
 // 仅在 BillingModelSource="upstream" 且 RestrictModels=true 时由调度循环调用。
-func (s *GatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context, groupID int64, account *Account, requestedModel string) bool {
+func (s *GatewayService) isAccountMappedModelRestrictedByChannel(ctx context.Context, groupID int64, account *Account, requestedModel string) bool {
 	if s.channelService == nil {
 		return false
 	}
@@ -1024,8 +1024,8 @@ func resolveAccountUpstreamModel(account *Account, requestedModel string) string
 	return account.GetMappedModel(requestedModel)
 }
 
-// needsUpstreamChannelRestrictionCheck 判断是否需要在调度循环中逐账号检查上游模型的渠道限制。
-func (s *GatewayService) needsUpstreamChannelRestrictionCheck(ctx context.Context, groupID *int64) bool {
+// needsUpstreamModelRestrictionCheck 判断是否需要在调度循环中逐账号检查上游模型的渠道限制。
+func (s *GatewayService) needsUpstreamModelRestrictionCheck(ctx context.Context, groupID *int64) bool {
 	if groupID == nil || s.channelService == nil {
 		return false
 	}
@@ -1041,14 +1041,14 @@ func (s *GatewayService) needsUpstreamChannelRestrictionCheck(ctx context.Contex
 }
 
 // isStickyAccountUpstreamRestricted 检查粘性会话命中的账号是否受 upstream 渠道限制。
-// 合并 needsUpstreamChannelRestrictionCheck + isUpstreamModelRestrictedByChannel 两步调用，
+// 合并 needsUpstreamModelRestrictionCheck + isAccountMappedModelRestrictedByChannel 两步调用，
 // 供 sticky session 条件链使用，避免内联多个函数调用导致行过长。
 func (s *GatewayService) isStickyAccountUpstreamRestricted(ctx context.Context, groupID *int64, account *Account, requestedModel string) bool {
 	if groupID == nil {
 		return false
 	}
-	if !s.needsUpstreamChannelRestrictionCheck(ctx, groupID) {
+	if !s.needsUpstreamModelRestrictionCheck(ctx, groupID) {
 		return false
 	}
-	return s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel)
+	return s.isAccountMappedModelRestrictedByChannel(ctx, *groupID, account, requestedModel)
 }

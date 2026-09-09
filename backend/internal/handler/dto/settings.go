@@ -240,6 +240,11 @@ type SystemSettings struct {
 	OpenAIAdvancedSchedulerEnabled                         bool    `json:"openai_advanced_scheduler_enabled"`
 	OpenAIAdvancedSchedulerStickyWeightedEnabled           bool    `json:"openai_advanced_scheduler_sticky_weighted_enabled"`
 	OpenAIAdvancedSchedulerSubscriptionPriorityEnabled     bool    `json:"openai_advanced_scheduler_subscription_priority_enabled"`
+	OpenAIPriorityDrainEnabled                             bool    `json:"openai_priority_drain_enabled"`
+	OpenAIPriorityDrainTTFTThresholdSeconds                int     `json:"openai_priority_drain_ttft_threshold_seconds"`
+	OpenAIPriorityDrainConsecutiveSlowCount                int     `json:"openai_priority_drain_consecutive_slow_count"`
+	OpenAIPriorityDrainStatisticsWindowSeconds             int     `json:"openai_priority_drain_statistics_window_seconds"`
+	OpenAIPriorityDrainSoftCooldownSeconds                 int     `json:"openai_priority_drain_soft_cooldown_seconds"`
 	OpenAIAdvancedSchedulerLBTopK                          string  `json:"openai_advanced_scheduler_lb_top_k"`
 	OpenAIAdvancedSchedulerWeightPriority                  string  `json:"openai_advanced_scheduler_weight_priority"`
 	OpenAIAdvancedSchedulerWeightLoad                      string  `json:"openai_advanced_scheduler_weight_load"`

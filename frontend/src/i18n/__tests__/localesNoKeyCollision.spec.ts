@@ -80,3 +80,10 @@ describe.each(Object.keys(roots))('locale %s spread assembly', (locale) => {
     expect(collisions(admins[locale])).toEqual([])
   })
 })
+
+describe('common nav locale keys', () => {
+  it('keeps channel monitor labels available', () => {
+    expect(enCommon.nav.channelMonitor).toBe('Channel Monitor')
+    expect(zhCommon.nav.channelMonitor).toBe('渠道监控')
+  })
+})

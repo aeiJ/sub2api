@@ -207,6 +207,7 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.openaiExperimentalScheduler.stickyWeightedDescription": "开启后 previous_response_id 和 session_hash 粘性进入高级调度打分；关闭时仍按旧逻辑硬命中粘性账号。",
     "admin.settings.openaiExperimentalScheduler.subscriptionPriorityTitle": "订阅优先",
     "admin.settings.openaiExperimentalScheduler.subscriptionPriorityDescription": "开启后先在 ChatGPT 订阅账号池中按权值选取；订阅池拿不到席位时再回退到非订阅账号池。",
+    "admin.settings.openaiExperimentalScheduler.priorityDrainTakenOver": "启用优先额度消耗后，粘性加权和订阅优先均由该策略接管；已有会话仍保持硬粘性。",
     "admin.settings.openaiExperimentalScheduler.weightsTitle": "调度权值覆盖",
     "admin.settings.openaiExperimentalScheduler.weightsDescription": "留空时使用配置/环境变量值；配置未设置时使用内置默认值。页面非空设置优先。",
     "admin.settings.openaiExperimentalScheduler.defaultPlaceholder": "配置/默认：{value}",
@@ -229,11 +230,6 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.upstreamBillingProbe.intervalHint": "范围 5–1440 分钟。",
     "admin.settings.upstreamBillingProbe.saved": "上游倍率自动探测设置已保存",
     "admin.settings.upstreamBillingProbe.saveFailed": "保存上游倍率自动探测设置失败",
-    "admin.settings.openaiFastPolicy.summaryTargetModels": "目标模型",
-    "admin.settings.openaiFastPolicy.summaryAllModels": "全部模型",
-    "admin.settings.openaiFastPolicy.summaryOtherModels": "其他模型",
-    "admin.settings.openaiFastPolicy.summaryAction.filter": "过滤",
-    "admin.settings.openaiFastPolicy.summaryAction.pass": "透传",
     "admin.settings.security.passkeyDeploymentHint":
       "请由服务器运维在部署配置中将 webauthn.enabled 设为 true，填写 webauthn.rp_id（仅域名）与 webauthn.rp_origins（完整 HTTPS 来源），然后重启服务。",
     "admin.settings.site.uploadImage": "上传图片",
@@ -464,7 +460,6 @@ const baseSettingsResponse = {
   min_claude_code_version: "",
   max_claude_code_version: "",
   allow_ungrouped_key_scheduling: false,
-  openai_ttft_mode: "semantic",
   enable_fingerprint_unification: true,
   enable_metadata_passthrough: false,
   enable_cch_signing: false,
@@ -506,6 +501,11 @@ const baseSettingsResponse = {
   openai_advanced_scheduler_enabled: false,
   openai_advanced_scheduler_sticky_weighted_enabled: false,
   openai_advanced_scheduler_subscription_priority_enabled: false,
+  openai_priority_drain_enabled: false,
+  openai_priority_drain_ttft_threshold_seconds: 15,
+  openai_priority_drain_consecutive_slow_count: 2,
+  openai_priority_drain_statistics_window_seconds: 900,
+  openai_priority_drain_soft_cooldown_seconds: 900,
   openai_advanced_scheduler_lb_top_k: "",
   openai_advanced_scheduler_weight_priority: "",
   openai_advanced_scheduler_weight_load: "",
@@ -1267,41 +1267,21 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(wrapper.text()).not.toContain("OpenAI 高级调度器");
   });
 
-  it("summarizes target and other-model actions, then switches to all models", async () => {
+  it("prevents disabling the advanced scheduler while priority drain is enabled", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
-      openai_fast_policy_settings: {
-        rules: [
-          {
-            service_tier: "all",
-            action: "filter",
-            scope: "all",
-            model_whitelist: ["gpt-5.6-sol"],
-            fallback_action: "pass",
-          },
-        ],
-      },
+      openai_advanced_scheduler_enabled: true,
+      openai_priority_drain_enabled: true,
     });
+
     const wrapper = mountView();
-
     await flushPromises();
-    await openGatewayTab(wrapper);
 
-    const summary = wrapper.get('[data-testid="openai-fast-policy-summary-0"]');
-    expect(summary.text()).toContain("目标模型");
-    expect(summary.text()).toContain("过滤");
-    expect(summary.text()).toContain("其他模型");
-    expect(summary.text()).toContain("透传");
-
-    await wrapper
-      .get(
-        '[role="group"][aria-labelledby="openai-fast-policy-models-label-0"] input[type="text"]',
-      )
-      .setValue("");
-    expect(summary.text()).toContain("全部模型");
-    expect(summary.text()).toContain("过滤");
-    expect(summary.text()).not.toContain("其他模型");
-    expect(summary.text()).not.toContain("透传");
+    const toggle = wrapper.get('[data-testid="openai-advanced-scheduler-toggle"]');
+    expect((toggle.element as HTMLInputElement).disabled).toBe(true);
+    const stickyToggle = wrapper.get('[data-testid="openai-sticky-weighted-toggle"]');
+    expect((stickyToggle.element as HTMLInputElement).disabled).toBe(true);
+    expect(wrapper.text()).toContain("粘性加权和订阅优先均由该策略接管");
   });
 
   it("loads and saves upstream billing probe settings from the gateway tab", async () => {
@@ -1362,27 +1342,6 @@ describe("admin SettingsView payment visible method controls", () => {
     const payload = updateSettings.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(payload.grok_default_text_model).toBe("grok-custom-text");
     expect(payload.grok_cross_client_model_map_enabled).toBe(false);
-  });
-
-  it("loads and saves the OpenAI Responses first-token metric mode", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      openai_ttft_mode: "visible",
-    });
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openGatewayTab(wrapper);
-
-    const modeSelect = wrapper.get('[data-testid="openai-ttft-mode"]');
-    expect((modeSelect.element as HTMLSelectElement).value).toBe("visible");
-
-    await modeSelect.setValue("semantic");
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    const payload = updateSettings.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(payload.openai_ttft_mode).toBe("semantic");
   });
 
   it("loads fail-safe-off Ollama Cloud usage refresh settings and saves an explicit opt-in", async () => {

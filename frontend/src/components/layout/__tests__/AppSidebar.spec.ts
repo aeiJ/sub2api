@@ -42,12 +42,24 @@ describe('AppSidebar scroll position persistence', () => {
   })
 })
 
-describe('AppSidebar collapsible groups', () => {
-  it('lets the user collapse a group even while a child route is active', () => {
-    // The expand state must come from the user's override first, falling back
-    // to the active-route heuristic only when the user has not clicked yet.
-    expect(componentSource).toContain('const groupExpandOverrides = ref<Map<string, boolean>>(new Map())')
-    expect(componentSource).not.toContain('expandedGroups.value.has(item.path) || isGroupActive(item)')
+describe('AppSidebar admin navigation', () => {
+  it('keeps channel management as an expandable admin section', () => {
+    expect(componentSource).toContain("path: '/admin/channels'")
+    expect(componentSource).toContain("label: t('nav.channelManagement')")
+    expect(componentSource).toContain('expandOnly: true')
+    expect(componentSource).toContain("path: '/admin/channels/pricing'")
+    expect(componentSource).toContain("label: t('nav.channelPricing')")
+    expect(componentSource).toContain("path: '/admin/channels/monitor'")
+    expect(componentSource).toContain("label: t('nav.channelMonitor')")
+  })
+})
+
+describe('AppSidebar logo navigation', () => {
+  it('navigates the logo to the public Home page', () => {
+    expect(componentSource).toContain('<router-link\n        to="/"')
+    expect(componentSource).toContain('class="sidebar-brand-title')
+    expect(componentSource).not.toContain('homePath')
+    expect(componentSource.match(/@click="handleMenuItemClick\('\/'\)"/g)).toHaveLength(2)
   })
 })
 

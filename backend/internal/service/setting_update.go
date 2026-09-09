@@ -43,11 +43,13 @@ func (s *SettingService) UpdateSettingsOmitting(ctx context.Context, settings *S
 		return err
 	}
 	omitted.dropFrom(updates)
+	clearPriorityDrainTTFT, priorityDrainTTFTPolicy := s.openAIPriorityDrainTTFTSettingsChanged(ctx, updates)
 
 	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
 		return err
 	}
 	s.refreshCachedSettingsAfterWrite(ctx, settings, omitted)
+	s.clearOpenAIPriorityDrainTTFTStates(ctx, clearPriorityDrainTTFT, priorityDrainTTFTPolicy)
 	return nil
 }
 
@@ -73,12 +75,85 @@ func (s *SettingService) UpdateSettingsWithAuthSourceDefaultsOmitting(ctx contex
 		updates[key] = value
 	}
 	omitted.dropFrom(updates)
+	clearPriorityDrainTTFT, priorityDrainTTFTPolicy := s.openAIPriorityDrainTTFTSettingsChanged(ctx, updates)
 
 	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
 		return err
 	}
 	s.refreshCachedSettingsAfterWrite(ctx, settings, omitted)
+	s.clearOpenAIPriorityDrainTTFTStates(ctx, clearPriorityDrainTTFT, priorityDrainTTFTPolicy)
 	return nil
+}
+
+var openAIPriorityDrainTTFTGlobalDefaults = map[string]string{
+	SettingKeyOpenAIPriorityDrainTTFTThresholdSeconds:    strconv.Itoa(defaultOpenAIPriorityDrainTTFTThreshold),
+	SettingKeyOpenAIPriorityDrainConsecutiveSlowCount:    strconv.Itoa(defaultOpenAIPriorityDrainSlowCount),
+	SettingKeyOpenAIPriorityDrainStatisticsWindowSeconds: strconv.Itoa(int(defaultOpenAIPriorityDrainWindow.Seconds())),
+	SettingKeyOpenAIPriorityDrainSoftCooldownSeconds:     strconv.Itoa(int(defaultOpenAIPriorityDrainCooldown.Seconds())),
+}
+
+func (s *SettingService) openAIPriorityDrainTTFTSettingsChanged(ctx context.Context, updates map[string]string) (bool, string) {
+	if s == nil || s.settingRepo == nil || s.openAIPriorityDrainStateStore == nil {
+		return false, ""
+	}
+	keys := make([]string, 0, len(openAIPriorityDrainTTFTGlobalDefaults))
+	hasUpdate := false
+	for key := range openAIPriorityDrainTTFTGlobalDefaults {
+		keys = append(keys, key)
+		if _, ok := updates[key]; ok {
+			hasUpdate = true
+		}
+	}
+	if !hasUpdate {
+		return false, ""
+	}
+	current, err := s.settingRepo.GetMultiple(ctx, keys)
+	if err != nil {
+		slog.Warn("read openai priority-drain TTFT settings before update failed; resetting state defensively", "error", err)
+		current = map[string]string{}
+	}
+	before := make(map[string]string, len(openAIPriorityDrainTTFTGlobalDefaults))
+	for key, fallback := range openAIPriorityDrainTTFTGlobalDefaults {
+		before[key] = fallback
+		if value := strings.TrimSpace(current[key]); value != "" {
+			before[key] = value
+		}
+	}
+	after := make(map[string]string, len(before))
+	for key, value := range before {
+		after[key] = value
+	}
+	for key := range openAIPriorityDrainTTFTGlobalDefaults {
+		if value, ok := updates[key]; ok {
+			after[key] = value
+		}
+	}
+	beforeFingerprint := openAIPriorityDrainGlobalPolicyFingerprintFromValues(before)
+	afterFingerprint := openAIPriorityDrainGlobalPolicyFingerprintFromValues(after)
+	return err != nil || beforeFingerprint != afterFingerprint, afterFingerprint
+}
+
+func openAIPriorityDrainGlobalPolicyFingerprintFromValues(values map[string]string) string {
+	return openAIPriorityDrainGlobalPolicyFingerprint(openAIPriorityDrainSettings{
+		ttftThresholdSeconds: parseOpenAIPriorityDrainSettingInt(values[SettingKeyOpenAIPriorityDrainTTFTThresholdSeconds], defaultOpenAIPriorityDrainTTFTThreshold, 1, 120),
+		consecutiveSlowCount: parseOpenAIPriorityDrainSettingInt(values[SettingKeyOpenAIPriorityDrainConsecutiveSlowCount], defaultOpenAIPriorityDrainSlowCount, 1, 10),
+		statisticsWindow:     time.Duration(parseOpenAIPriorityDrainSettingInt(values[SettingKeyOpenAIPriorityDrainStatisticsWindowSeconds], int(defaultOpenAIPriorityDrainWindow.Seconds()), 1, 86400)) * time.Second,
+		softCooldown:         time.Duration(parseOpenAIPriorityDrainSettingInt(values[SettingKeyOpenAIPriorityDrainSoftCooldownSeconds], int(defaultOpenAIPriorityDrainCooldown.Seconds()), 1, 86400)) * time.Second,
+	})
+}
+
+func (s *SettingService) clearOpenAIPriorityDrainTTFTStates(ctx context.Context, clear bool, policyFingerprint string) {
+	if !clear || s == nil || s.openAIPriorityDrainStateStore == nil {
+		return
+	}
+	clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := s.openAIPriorityDrainStateStore.FenceOpenAIPriorityDrainTTFTGlobalPolicy(clearCtx, policyFingerprint); err != nil {
+		slog.Warn("fence openai priority-drain TTFT state after global setting update failed", "error", err)
+	}
+	if err := s.openAIPriorityDrainStateStore.ClearAllOpenAIPriorityDrainTTFTStates(clearCtx); err != nil {
+		slog.Warn("clear all openai priority-drain TTFT states after global setting update failed", "error", err)
+	}
 }
 
 // refreshCachedSettingsAfterWrite keeps the in-process caches in step with the
@@ -500,6 +575,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[openAIAdvancedSchedulerSettingKey] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerEnabled)
 	updates[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerStickyWeightedEnabled)
 	updates[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled)
+	updates[SettingKeyOpenAIPriorityDrainEnabled] = strconv.FormatBool(settings.OpenAIPriorityDrainEnabled)
+	updates[SettingKeyOpenAIPriorityDrainTTFTThresholdSeconds] = strconv.Itoa(settings.OpenAIPriorityDrainTTFTThresholdSeconds)
+	updates[SettingKeyOpenAIPriorityDrainConsecutiveSlowCount] = strconv.Itoa(settings.OpenAIPriorityDrainConsecutiveSlowCount)
+	updates[SettingKeyOpenAIPriorityDrainStatisticsWindowSeconds] = strconv.Itoa(settings.OpenAIPriorityDrainStatisticsWindowSeconds)
+	updates[SettingKeyOpenAIPriorityDrainSoftCooldownSeconds] = strconv.Itoa(settings.OpenAIPriorityDrainSoftCooldownSeconds)
 	updates[SettingKeyOpenAIAdvancedSchedulerLBTopK] = settings.OpenAIAdvancedSchedulerLBTopK
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightPriority] = settings.OpenAIAdvancedSchedulerWeightPriority
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightLoad] = settings.OpenAIAdvancedSchedulerWeightLoad
@@ -743,6 +823,11 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		enabled:                        settings.OpenAIAdvancedSchedulerEnabled,
 		stickyWeightedEnabled:          settings.OpenAIAdvancedSchedulerStickyWeightedEnabled,
 		subscriptionPriorityEnabled:    settings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
+		priorityDrainEnabled:           settings.OpenAIPriorityDrainEnabled,
+		priorityDrainTTFTThreshold:     settings.OpenAIPriorityDrainTTFTThresholdSeconds,
+		priorityDrainSlowCount:         settings.OpenAIPriorityDrainConsecutiveSlowCount,
+		priorityDrainWindow:            time.Duration(settings.OpenAIPriorityDrainStatisticsWindowSeconds) * time.Second,
+		priorityDrainCooldown:          time.Duration(settings.OpenAIPriorityDrainSoftCooldownSeconds) * time.Second,
 		lbTopKOverride:                 parsePositiveIntOverride(settings.OpenAIAdvancedSchedulerLBTopK),
 		weightOverrides: parseOpenAIAdvancedSchedulerWeightOverrides(map[string]string{
 			SettingKeyOpenAIAdvancedSchedulerWeightPriority:         settings.OpenAIAdvancedSchedulerWeightPriority,

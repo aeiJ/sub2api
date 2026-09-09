@@ -66,7 +66,11 @@ func newBackendModeSettingService(t *testing.T, enabled string) *service.Setting
 	}
 	svc := service.NewSettingService(repo, &config.Config{})
 	require.NoError(t, svc.UpdateSettings(context.Background(), &service.SystemSettings{
-		BackendModeEnabled: enabled == "true",
+		BackendModeEnabled:                         enabled == "true",
+		OpenAIPriorityDrainTTFTThresholdSeconds:    15,
+		OpenAIPriorityDrainConsecutiveSlowCount:    2,
+		OpenAIPriorityDrainStatisticsWindowSeconds: 900,
+		OpenAIPriorityDrainSoftCooldownSeconds:     900,
 	}))
 
 	return svc

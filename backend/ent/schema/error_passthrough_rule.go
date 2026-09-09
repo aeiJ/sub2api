@@ -97,7 +97,7 @@ func (ErrorPassthroughRule) Fields() []ent.Field {
 		// true: 使用上游返回的错误信息
 		// false: 使用 custom_message 指定的错误信息
 		field.Bool("passthrough_body").
-			Default(true),
+			Default(false),
 
 		// custom_message: 自定义错误信息
 		// 当 passthrough_body=false 时使用此错误信息

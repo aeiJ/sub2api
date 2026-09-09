@@ -5078,6 +5078,7 @@
                 <Toggle
                   v-model="form.openai_advanced_scheduler_enabled"
                   data-testid="openai-advanced-scheduler-toggle"
+                  :disabled="form.openai_priority_drain_enabled"
                 />
               </div>
 
@@ -5097,7 +5098,11 @@
                     }}
                   </p>
                 </div>
-                <Toggle v-model="form.openai_advanced_scheduler_sticky_weighted_enabled" />
+                <Toggle
+                  v-model="form.openai_advanced_scheduler_sticky_weighted_enabled"
+                  data-testid="openai-sticky-weighted-toggle"
+                  :disabled="form.openai_priority_drain_enabled"
+                />
               </div>
 
               <div
@@ -5116,7 +5121,48 @@
                     }}
                   </p>
                 </div>
-                <Toggle v-model="form.openai_advanced_scheduler_subscription_priority_enabled" />
+                <Toggle
+                  v-model="form.openai_advanced_scheduler_subscription_priority_enabled"
+                  :disabled="form.openai_priority_drain_enabled"
+                />
+              </div>
+
+              <div
+                v-if="form.openai_advanced_scheduler_enabled"
+                class="border-t border-gray-100 pt-5 dark:border-dark-700"
+              >
+                <div class="flex items-center justify-between">
+                  <div>
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.openaiExperimentalScheduler.priorityDrainTitle") }}
+                    </label>
+                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.openaiExperimentalScheduler.priorityDrainDescription") }}
+                    </p>
+                  </div>
+                  <Toggle v-model="form.openai_priority_drain_enabled" />
+                </div>
+                <p v-if="form.openai_priority_drain_enabled" class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                  {{ t("admin.settings.openaiExperimentalScheduler.priorityDrainTakenOver") }}
+                </p>
+                <div v-if="form.openai_priority_drain_enabled" class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  <label class="block">
+                    <span class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ t("admin.settings.openaiExperimentalScheduler.ttftThreshold") }}</span>
+                    <input v-model.number="form.openai_priority_drain_ttft_threshold_seconds" class="input mt-1" min="1" max="120" type="number" />
+                  </label>
+                  <label class="block">
+                    <span class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ t("admin.settings.openaiExperimentalScheduler.slowCount") }}</span>
+                    <input v-model.number="form.openai_priority_drain_consecutive_slow_count" class="input mt-1" min="1" max="10" type="number" />
+                  </label>
+                  <label class="block">
+                    <span class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ t("admin.settings.openaiExperimentalScheduler.statisticsWindow") }}</span>
+                    <input v-model.number="form.openai_priority_drain_statistics_window_seconds" class="input mt-1" min="1" max="86400" type="number" />
+                  </label>
+                  <label class="block">
+                    <span class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ t("admin.settings.openaiExperimentalScheduler.softCooldown") }}</span>
+                    <input v-model.number="form.openai_priority_drain_soft_cooldown_seconds" class="input mt-1" min="1" max="86400" type="number" />
+                  </label>
+                </div>
               </div>
 
               <div
@@ -9521,6 +9567,11 @@ type SettingsForm = Omit<
   openai_advanced_scheduler_enabled: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled: boolean;
   openai_advanced_scheduler_subscription_priority_enabled: boolean;
+  openai_priority_drain_enabled: boolean;
+  openai_priority_drain_ttft_threshold_seconds: number;
+  openai_priority_drain_consecutive_slow_count: number;
+  openai_priority_drain_statistics_window_seconds: number;
+  openai_priority_drain_soft_cooldown_seconds: number;
   openai_advanced_scheduler_lb_top_k: string;
   openai_advanced_scheduler_weight_priority: string;
   openai_advanced_scheduler_weight_load: string;
@@ -9763,6 +9814,11 @@ const form = reactive<SettingsForm>({
   openai_advanced_scheduler_enabled: false,
   openai_advanced_scheduler_sticky_weighted_enabled: false,
   openai_advanced_scheduler_subscription_priority_enabled: false,
+  openai_priority_drain_enabled: false,
+  openai_priority_drain_ttft_threshold_seconds: 15,
+  openai_priority_drain_consecutive_slow_count: 2,
+  openai_priority_drain_statistics_window_seconds: 900,
+  openai_priority_drain_soft_cooldown_seconds: 900,
   openai_advanced_scheduler_lb_top_k: "",
   openai_advanced_scheduler_weight_priority: "",
   openai_advanced_scheduler_weight_load: "",
@@ -11434,6 +11490,15 @@ async function saveSettings() {
         form.openai_advanced_scheduler_sticky_weighted_enabled,
       openai_advanced_scheduler_subscription_priority_enabled:
         form.openai_advanced_scheduler_subscription_priority_enabled,
+      openai_priority_drain_enabled: form.openai_priority_drain_enabled,
+      openai_priority_drain_ttft_threshold_seconds:
+        form.openai_priority_drain_ttft_threshold_seconds,
+      openai_priority_drain_consecutive_slow_count:
+        form.openai_priority_drain_consecutive_slow_count,
+      openai_priority_drain_statistics_window_seconds:
+        form.openai_priority_drain_statistics_window_seconds,
+      openai_priority_drain_soft_cooldown_seconds:
+        form.openai_priority_drain_soft_cooldown_seconds,
       openai_advanced_scheduler_lb_top_k:
         form.openai_advanced_scheduler_lb_top_k.trim(),
       openai_advanced_scheduler_weight_priority:

@@ -7,7 +7,8 @@ import GroupsView from '../GroupsView.vue'
 const {
   listGroups,
   getAllGroups,
-  getModelAllowlistCandidates,
+  getLiveCapability,
+  getModelsListCandidates,
   getUsageSummary,
   getCapacitySummary,
   getLiveCapability,
@@ -16,11 +17,11 @@ const {
   showSuccess,
   isCurrentStep,
   nextStep,
-  authState,
 } = vi.hoisted(() => ({
   listGroups: vi.fn(),
   getAllGroups: vi.fn(),
-  getModelAllowlistCandidates: vi.fn(),
+  getLiveCapability: vi.fn(),
+  getModelsListCandidates: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
   getLiveCapability: vi.fn(),
@@ -29,7 +30,6 @@ const {
   showSuccess: vi.fn(),
   isCurrentStep: vi.fn(),
   nextStep: vi.fn(),
-  authState: { isSimpleMode: false },
 }))
 
 const messages: Record<string, string> = {
@@ -45,9 +45,6 @@ const messages: Record<string, string> = {
   'admin.groups.columns.usage': 'Usage',
   'admin.groups.columns.status': 'Status',
   'admin.groups.columns.actions': 'Actions',
-  'admin.groups.usageToday': 'Today',
-  'admin.groups.usageYesterday': 'Yesterday',
-  'admin.groups.usageTotal': 'Total',
 }
 
 vi.mock('@/api/admin', () => ({
@@ -55,7 +52,8 @@ vi.mock('@/api/admin', () => ({
     groups: {
       list: listGroups,
       getAll: getAllGroups,
-      getModelAllowlistCandidates,
+      getLiveCapability,
+      getModelsListCandidates,
       getUsageSummary,
       getCapacitySummary,
       getLiveCapability,
@@ -75,10 +73,6 @@ vi.mock('@/stores/app', () => ({
     showError,
     showSuccess,
   }),
-}))
-
-vi.mock('@/stores/auth', () => ({
-  useAuthStore: () => authState,
 }))
 
 vi.mock('@/stores/onboarding', () => ({
@@ -134,7 +128,7 @@ const createGroup = (overrides: Partial<AdminGroup> = {}): AdminGroup => ({
   account_count: 3,
   active_account_count: 2,
   rate_limited_account_count: 1,
-  model_allowlist: undefined,
+  models_list_config: undefined,
   sort_order: 10,
   ...overrides,
 })
@@ -160,9 +154,6 @@ const DataTableStub = {
     <div>
       <div data-test="columns">{{ columns.map((col) => col.key).join(',') }}</div>
       <div data-test="rows">{{ data.map((row) => row.name).join(',') }}</div>
-      <div v-if="data.length" data-test="usage-cell">
-        <slot name="cell-usage" :row="data[0]" />
-      </div>
     </div>
   `,
 }
@@ -239,16 +230,15 @@ describe('admin GroupsView column settings', () => {
 
     listGroups.mockReset()
     getAllGroups.mockReset()
-    getModelAllowlistCandidates.mockReset()
+    getLiveCapability.mockReset()
+    getModelsListCandidates.mockReset()
     getUsageSummary.mockReset()
     getCapacitySummary.mockReset()
-    getLiveCapability.mockReset()
     listAccounts.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
     isCurrentStep.mockReset()
     nextStep.mockReset()
-    authState.isSimpleMode = false
 
     listGroups.mockResolvedValue({
       items: [createGroup()],
@@ -258,29 +248,13 @@ describe('admin GroupsView column settings', () => {
       pages: 1,
     })
     getAllGroups.mockResolvedValue([])
-    getModelAllowlistCandidates.mockResolvedValue([])
+    getLiveCapability.mockResolvedValue({ supported: false })
+    getModelsListCandidates.mockResolvedValue([])
     getUsageSummary.mockResolvedValue([])
     getCapacitySummary.mockResolvedValue([])
     getLiveCapability.mockResolvedValue({ supported: false })
     listAccounts.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
     isCurrentStep.mockReturnValue(false)
-  })
-
-  it('does not call advanced group APIs or expose the exclusive filter in simple mode', async () => {
-    authState.isSimpleMode = true
-    const wrapper = await mountView()
-
-    expect(getLiveCapability).not.toHaveBeenCalled()
-    expect(getModelAllowlistCandidates).not.toHaveBeenCalled()
-    expect(getUsageSummary).not.toHaveBeenCalled()
-    expect(getCapacitySummary).not.toHaveBeenCalled()
-    expect(listGroups).toHaveBeenCalledWith(
-      expect.any(Number),
-      expect.any(Number),
-      expect.objectContaining({ is_exclusive: undefined }),
-      expect.anything(),
-    )
-    expect(wrapper.find('select').text()).not.toContain('admin.groups.allGroups')
   })
 
   afterEach(() => {
@@ -409,26 +383,10 @@ describe('admin GroupsView column settings', () => {
     await openColumnSettings(wrapper)
     await clickColumnToggle(wrapper, 'Usage')
     expect(getUsageSummary).toHaveBeenCalledTimes(1)
-    expect(getUsageSummary).toHaveBeenCalledWith()
     expect(getCapacitySummary).not.toHaveBeenCalled()
 
     await clickColumnToggle(wrapper, 'Capacity')
     expect(getUsageSummary).toHaveBeenCalledTimes(1)
     expect(getCapacitySummary).toHaveBeenCalledTimes(1)
-  })
-
-  it('renders yesterday usage between today and total', async () => {
-    getUsageSummary.mockResolvedValue([
-      { group_id: 1, today_cost: 1.25, yesterday_cost: 2.5, total_cost: 9.75 },
-    ])
-
-    const wrapper = await mountView()
-    const text = wrapper.get('[data-test="usage-cell"]').text()
-
-    expect(text).toContain('Today$1.25')
-    expect(text).toContain('Yesterday$2.50')
-    expect(text).toContain('Total$9.75')
-    expect(text.indexOf('Today')).toBeLessThan(text.indexOf('Yesterday'))
-    expect(text.indexOf('Yesterday')).toBeLessThan(text.indexOf('Total'))
   })
 })

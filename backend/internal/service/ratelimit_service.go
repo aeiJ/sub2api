@@ -72,6 +72,8 @@ const (
 	maxRateLimit429CooldownSeconds     = 7200
 )
 
+const openAIRateLimit429NoResetCooldown = 5 * time.Hour
+
 const (
 	openAIImageRateLimitDefaultCooldown = time.Minute
 	openAIImageRateLimitReason          = "openai_image_rate_limited"
@@ -1215,6 +1217,8 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 				slog.Info("account_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", resetTime, "reset_in", time.Until(resetTime).Truncate(time.Second))
 				return
 			}
+			s.applyOpenAI429NoResetRateLimit(ctx, account)
+			return
 		case PlatformGemini, PlatformAntigravity:
 			// 尝试解析 Gemini 格式（用于其他平台）
 			if resetAt := ParseGeminiRateLimitResetTime(responseBody); resetAt != nil {
@@ -1272,6 +1276,15 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	}
 
 	slog.Info("account_rate_limited", "account_id", account.ID, "reset_at", resetAt)
+}
+
+func (s *RateLimitService) applyOpenAI429NoResetRateLimit(ctx context.Context, account *Account) {
+	resetAt := time.Now().Add(openAIRateLimit429NoResetCooldown)
+	slog.Warn("openai_429_no_reset_time", "account_id", account.ID, "using_default", openAIRateLimit429NoResetCooldown.String(), "reset_at", resetAt)
+	s.notifyAccountSchedulingBlocked(account, resetAt, "429")
+	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
+		slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
+	}
 }
 
 func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, account *Account, reason string) {
