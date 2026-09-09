@@ -1,0 +1,83 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Sub2API AI Brain Logo</title>
+  <desc id="desc">A rounded app logo showing a luminous AI brain connected to API routing nodes for Sub2API.</desc>
+  <defs>
+    <radialGradient id="bgGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(342 230) rotate(51.2) scale(894 766)">
+      <stop stop-color="#203A7D"/>
+      <stop offset="0.46" stop-color="#10245D"/>
+      <stop offset="1" stop-color="#08142F"/>
+    </radialGradient>
+    <linearGradient id="markGradient" x1="171" y1="205" x2="849" y2="820" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#79FFB8"/>
+      <stop offset="0.42" stop-color="#3EE9FF"/>
+      <stop offset="1" stop-color="#2868FF"/>
+    </linearGradient>
+    <linearGradient id="brainGradient" x1="338" y1="280" x2="680" y2="662" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A7FFD0"/>
+      <stop offset="0.48" stop-color="#60F0FF"/>
+      <stop offset="1" stop-color="#4A78FF"/>
+    </linearGradient>
+    <linearGradient id="lineGradient" x1="165" y1="522" x2="861" y2="522" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7AFFBE"/>
+      <stop offset="0.5" stop-color="#43EAFE"/>
+      <stop offset="1" stop-color="#4E7BFF"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="28" stdDeviation="31" flood-color="#020817" flood-opacity="0.42"/>
+    </filter>
+    <filter id="neon" x="-50%" y="-50%" width="200%" height="200%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="9" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.16 0 0 0 0 0.75 0 0 0 0 1 0 0 0 0.58 0" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="brainClip">
+      <path d="M514.4 250.3c-87.6 0-158.6 56.4-158.6 126 0 9.1 1.2 18 3.6 26.5-47.7 18.2-81.6 61.6-81.6 112.4 0 66.3 57.8 120.1 129.2 120.1h35.6v42.8c0 31.7 26.7 57.4 59.7 57.4 29.1 0 53.3-20 58.6-46.5 14.2 5.8 30 9.1 46.6 9.1 66 0 119.6-49.8 119.6-111.2 0-14.7-3.1-28.8-8.7-41.7 37.8-22.5 62.7-61.3 62.7-105.4 0-65.1-54.3-118.2-122.4-122.8-28.5-40.3-81.7-66.7-144.3-66.7Z"/>
+    </clipPath>
+  </defs>
+
+  <rect x="34" y="34" width="956" height="956" rx="218" fill="url(#bgGlow)"/>
+  <rect x="45" y="45" width="934" height="934" rx="207" stroke="#57C7FF" stroke-opacity="0.18" stroke-width="2"/>
+  <path d="M130 746C264 832 480 867 678 824C782 801 855 758 902 707" stroke="#2AE8FF" stroke-opacity="0.08" stroke-width="52" stroke-linecap="round"/>
+  <path d="M125 252C260 166 525 126 739 190C815 213 872 247 909 289" stroke="#79FFB8" stroke-opacity="0.08" stroke-width="42" stroke-linecap="round"/>
+
+  <g filter="url(#softShadow)">
+    <path d="M212 617h89c20.1 0 37.8 12.9 44 31.9l13.9 42.1c7.1 21.4 27.1 35.8 49.6 35.8H555" stroke="url(#lineGradient)" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M812 399h-89c-20.1 0-37.8-12.9-44-31.9L665.1 325c-7.1-21.4-27.1-35.8-49.6-35.8H469" stroke="url(#lineGradient)" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M163 506h204c25.9 0 49.8-13.9 62.7-36.3l22.9-39.7" stroke="url(#lineGradient)" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M861 506H657c-25.9 0-49.8 13.9-62.7 36.3L571.4 582" stroke="url(#lineGradient)" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="164" cy="506" r="38" fill="#091B3D" stroke="url(#markGradient)" stroke-width="26"/>
+    <circle cx="212" cy="617" r="32" fill="#091B3D" stroke="url(#markGradient)" stroke-width="22"/>
+    <circle cx="812" cy="399" r="32" fill="#091B3D" stroke="url(#markGradient)" stroke-width="22"/>
+    <circle cx="861" cy="506" r="38" fill="#091B3D" stroke="url(#markGradient)" stroke-width="26"/>
+  </g>
+
+  <g filter="url(#neon)">
+    <path d="M514.4 250.3c-87.6 0-158.6 56.4-158.6 126 0 9.1 1.2 18 3.6 26.5-47.7 18.2-81.6 61.6-81.6 112.4 0 66.3 57.8 120.1 129.2 120.1h35.6v42.8c0 31.7 26.7 57.4 59.7 57.4 29.1 0 53.3-20 58.6-46.5 14.2 5.8 30 9.1 46.6 9.1 66 0 119.6-49.8 119.6-111.2 0-14.7-3.1-28.8-8.7-41.7 37.8-22.5 62.7-61.3 62.7-105.4 0-65.1-54.3-118.2-122.4-122.8-28.5-40.3-81.7-66.7-144.3-66.7Z" fill="url(#brainGradient)"/>
+    <path d="M514.4 250.3c-87.6 0-158.6 56.4-158.6 126 0 9.1 1.2 18 3.6 26.5-47.7 18.2-81.6 61.6-81.6 112.4 0 66.3 57.8 120.1 129.2 120.1h35.6v42.8c0 31.7 26.7 57.4 59.7 57.4 29.1 0 53.3-20 58.6-46.5 14.2 5.8 30 9.1 46.6 9.1 66 0 119.6-49.8 119.6-111.2 0-14.7-3.1-28.8-8.7-41.7 37.8-22.5 62.7-61.3 62.7-105.4 0-65.1-54.3-118.2-122.4-122.8-28.5-40.3-81.7-66.7-144.3-66.7Z" stroke="#D9FFF2" stroke-opacity="0.78" stroke-width="6"/>
+  </g>
+
+  <g clip-path="url(#brainClip)">
+    <path d="M418 315c-37 19-56 45-57 80 0 23 10 42 30 56-27 12-43 32-47 59-4 34 12 61 48 80" stroke="#062557" stroke-opacity="0.53" stroke-width="20" stroke-linecap="round"/>
+    <path d="M513 275c-28 24-42 52-42 84 0 32 15 57 44 75-35 24-50 55-46 92 3 34 23 61 61 81-19 27-22 58-8 93" stroke="#062557" stroke-opacity="0.55" stroke-width="20" stroke-linecap="round"/>
+    <path d="M621 308c27 24 38 52 32 85-5 27-21 48-47 62 35 19 53 48 54 85 0 34-16 61-48 82" stroke="#062557" stroke-opacity="0.5" stroke-width="20" stroke-linecap="round"/>
+    <path d="M364 441c42-3 72 9 91 34" stroke="#DFFFF4" stroke-opacity="0.62" stroke-width="12" stroke-linecap="round"/>
+    <path d="M562 438c45-10 83-4 114 18" stroke="#DFFFF4" stroke-opacity="0.55" stroke-width="12" stroke-linecap="round"/>
+    <path d="M357 565c38-19 78-20 120-2" stroke="#DFFFF4" stroke-opacity="0.56" stroke-width="12" stroke-linecap="round"/>
+    <path d="M548 588c33 22 72 24 118 8" stroke="#DFFFF4" stroke-opacity="0.52" stroke-width="12" stroke-linecap="round"/>
+  </g>
+
+  <g filter="url(#neon)">
+    <circle cx="512" cy="512" r="33" fill="#071B3C" stroke="#DBFFF0" stroke-width="10"/>
+    <circle cx="431" cy="419" r="17" fill="#071B3C" stroke="#DBFFF0" stroke-width="8"/>
+    <circle cx="603" cy="432" r="17" fill="#071B3C" stroke="#DBFFF0" stroke-width="8"/>
+    <circle cx="442" cy="594" r="17" fill="#071B3C" stroke="#DBFFF0" stroke-width="8"/>
+    <circle cx="613" cy="584" r="17" fill="#071B3C" stroke="#DBFFF0" stroke-width="8"/>
+    <path d="M453 433L489 480M579 449L538 484M467 581L489 541M591 578L538 540" stroke="#DBFFF0" stroke-width="9" stroke-linecap="round"/>
+  </g>
+
+  <path d="M226 819h572" stroke="#7DF9D0" stroke-opacity="0.22" stroke-width="6" stroke-linecap="round"/>
+  <path d="M285 844h454" stroke="#4895FF" stroke-opacity="0.18" stroke-width="5" stroke-linecap="round"/>
+</svg>

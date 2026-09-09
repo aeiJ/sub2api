@@ -103,12 +103,12 @@ describe('HomeView compact mode', () => {
     expect(wrapper.get('[data-testid="compact-home"]').text()).toContain('Test site')
   })
 
-  it.each([undefined, false])('selects the default home when compact mode is %s', (enabled) => {
+  it.each([undefined, false])('selects the customized default home when compact mode is %s', (enabled) => {
     const settings = enabled === undefined ? {} : { compact_home_enabled: enabled }
     const wrapper = mountHome(settings)
 
     expect(wrapper.find('[data-testid="compact-home"]').exists()).toBe(false)
-    expect(wrapper.find('.terminal-container').exists()).toBe(true)
+    expect(wrapper.find('.home-quantum').exists()).toBe(true)
   })
 
   it('links unauthenticated visitors to login', () => {
@@ -138,7 +138,7 @@ describe('HomeView compact mode', () => {
       model_plaza_require_auth: false,
     })
 
-    expect(modelPlazaDestination(wrapper)).toBe('/model-plaza')
+    expect(modelPlazaDestination(wrapper)).toBeUndefined()
   })
 
   it('hides the model plaza link from anonymous visitors when sign-in is required', () => {
@@ -160,10 +160,10 @@ describe('HomeView compact mode', () => {
       model_plaza_require_auth: true,
     })
 
-    expect(modelPlazaDestination(wrapper)).toBe('/model-plaza')
+    expect(modelPlazaDestination(wrapper)).toBeUndefined()
   })
 
-  it('shows the model plaza link in the default home header', () => {
+  it('shows the model plaza link in the customized default home header', () => {
     const wrapper = mountHome({
       model_plaza_enabled: true,
       model_plaza_require_auth: false,
