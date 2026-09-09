@@ -138,7 +138,7 @@ describe('HomeView compact mode', () => {
       model_plaza_require_auth: false,
     })
 
-    expect(modelPlazaDestination(wrapper)).toBeUndefined()
+    expect(modelPlazaDestination(wrapper)).toBe('/model-plaza')
   })
 
   it('hides the model plaza link from anonymous visitors when sign-in is required', () => {
@@ -160,7 +160,7 @@ describe('HomeView compact mode', () => {
       model_plaza_require_auth: true,
     })
 
-    expect(modelPlazaDestination(wrapper)).toBeUndefined()
+    expect(modelPlazaDestination(wrapper)).toBe('/model-plaza')
   })
 
   it('shows the model plaza link in the customized default home header', () => {

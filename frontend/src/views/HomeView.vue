@@ -22,6 +22,7 @@
 	    :is-authenticated="isAuthenticated"
 	    :dashboard-path="dashboardPath"
 	    :current-year="currentYear"
+	    :show-model-plaza-entry="showModelPlazaEntry"
 	    @toggle-theme="toggleTheme"
 	  />
 
@@ -468,6 +469,7 @@ import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import CompactHomePage from '@/components/home/CompactHomePage.vue'
 import { applyThemeClass } from '@/utils/theme'
+import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
 import { sanitizeUrl } from '@/utils/url'
 
 const { t } = useI18n()
@@ -498,6 +500,13 @@ const githubUrl = 'https://github.com/Wei-Shaw/sub2api'
 
 // Auth state
 const isAuthenticated = computed(() => authStore.isAuthenticated)
+const modelPlazaEnabled = computed(() => isFeatureFlagEnabled(FeatureFlags.modelPlaza))
+const modelPlazaRequiresAuth = computed(
+  () => appStore.cachedPublicSettings?.model_plaza_require_auth === true,
+)
+const showModelPlazaEntry = computed(
+  () => modelPlazaEnabled.value && (isAuthenticated.value || !modelPlazaRequiresAuth.value),
+)
 const isAdmin = computed(() => authStore.isAdmin)
 const dashboardPath = computed(() => isAdmin.value ? '/admin/dashboard' : '/dashboard')
 const userInitial = computed(() => {
