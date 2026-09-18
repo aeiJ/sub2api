@@ -22,7 +22,6 @@
 	    :is-authenticated="isAuthenticated"
 	    :dashboard-path="dashboardPath"
 	    :current-year="currentYear"
-	    :show-model-plaza-entry="showModelPlazaEntry"
 	    @toggle-theme="toggleTheme"
 	  />
 
@@ -87,15 +86,6 @@
 	            <Icon v-if="isDark" name="sun" size="md" />
             <Icon v-else name="moon" size="md" />
           </button>
-
-          <!-- Model Marketplace Button -->
-	          <router-link
-	            to="/model-plaza"
-	            class="home-secondary-pill inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium transition-colors"
-	          >
-	            <Icon name="grid" size="xs" class="mr-1 hidden sm:block" />
-	            <span>{{ t('nav.modelPlaza') }}</span>
-          </router-link>
 
           <!-- Login / Dashboard Button -->
           <router-link
@@ -164,12 +154,6 @@
 	              >
 	                {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
 	                <Icon name="arrowRight" size="md" class="ml-2 transition-transform group-hover:translate-x-1" :stroke-width="2" />
-	              </router-link>
-	              <router-link
-	                to="/model-plaza"
-	                class="home-cta-secondary inline-flex min-h-[48px] items-center justify-center rounded-full px-7 py-3 text-base font-semibold transition-all duration-300"
-	              >
-	                {{ t('nav.modelPlaza') }}
 	              </router-link>
 	            </div>
 	          </div>
@@ -469,7 +453,6 @@ import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import CompactHomePage from '@/components/home/CompactHomePage.vue'
 import { applyThemeClass } from '@/utils/theme'
-import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
 import { sanitizeUrl } from '@/utils/url'
 
 const { t } = useI18n()
@@ -500,13 +483,6 @@ const githubUrl = 'https://github.com/Wei-Shaw/sub2api'
 
 // Auth state
 const isAuthenticated = computed(() => authStore.isAuthenticated)
-const modelPlazaEnabled = computed(() => isFeatureFlagEnabled(FeatureFlags.modelPlaza))
-const modelPlazaRequiresAuth = computed(
-  () => appStore.cachedPublicSettings?.model_plaza_require_auth === true,
-)
-const showModelPlazaEntry = computed(
-  () => modelPlazaEnabled.value && (isAuthenticated.value || !modelPlazaRequiresAuth.value),
-)
 const isAdmin = computed(() => authStore.isAdmin)
 const dashboardPath = computed(() => isAdmin.value ? '/admin/dashboard' : '/dashboard')
 const userInitial = computed(() => {

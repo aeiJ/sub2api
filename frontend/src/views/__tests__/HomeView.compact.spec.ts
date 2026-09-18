@@ -131,54 +131,33 @@ describe('HomeView compact mode', () => {
     expect(appStore.fetchPublicSettings).not.toHaveBeenCalled()
   })
 
-  it('shows the model plaza link to anonymous visitors when public access is enabled', () => {
-    const wrapper = mountHome({
-      compact_home_enabled: true,
-      model_plaza_enabled: true,
-      model_plaza_require_auth: false,
+  describe.each([false, true])('home navigation with compact mode %s', (compact) => {
+    it.each([
+      { visitor: 'anonymous', authenticated: false, admin: false, enabled: true, requireAuth: false },
+      { visitor: 'anonymous with sign-in required', authenticated: false, admin: false, enabled: true, requireAuth: true },
+      { visitor: 'authenticated user', authenticated: true, admin: false, enabled: true, requireAuth: false },
+      { visitor: 'authenticated user with sign-in required', authenticated: true, admin: false, enabled: true, requireAuth: true },
+      { visitor: 'administrator', authenticated: true, admin: true, enabled: true, requireAuth: false },
+      { visitor: 'anonymous with model plaza disabled', authenticated: false, admin: false, enabled: false, requireAuth: false },
+    ])('omits model plaza but preserves login/dashboard for $visitor', ({ authenticated, admin, enabled, requireAuth }) => {
+      authStore.isAuthenticated = authenticated
+      authStore.isAdmin = admin
+
+      const wrapper = mountHome({
+        compact_home_enabled: compact,
+        model_plaza_enabled: enabled,
+        model_plaza_require_auth: requireAuth,
+      })
+
+      expect(modelPlazaDestination(wrapper)).toBeUndefined()
+      expect(wrapper.findAllComponents(RouterLinkStub).map((link) => link.props('to'))).toContain(
+        authenticated ? (admin ? '/admin/dashboard' : '/dashboard') : '/login',
+      )
+      expect(wrapper.find('[data-testid="compact-home"]').exists()).toBe(compact)
+      if (!compact) {
+        expect(wrapper.find('.command-deck').exists()).toBe(true)
+      }
+      wrapper.unmount()
     })
-
-    expect(modelPlazaDestination(wrapper)).toBe('/model-plaza')
-  })
-
-  it('hides the model plaza link from anonymous visitors when sign-in is required', () => {
-    const wrapper = mountHome({
-      compact_home_enabled: true,
-      model_plaza_enabled: true,
-      model_plaza_require_auth: true,
-    })
-
-    expect(modelPlazaDestination(wrapper)).toBeUndefined()
-  })
-
-  it('shows the model plaza link to authenticated visitors when sign-in is required', () => {
-    authStore.isAuthenticated = true
-
-    const wrapper = mountHome({
-      compact_home_enabled: true,
-      model_plaza_enabled: true,
-      model_plaza_require_auth: true,
-    })
-
-    expect(modelPlazaDestination(wrapper)).toBe('/model-plaza')
-  })
-
-  it('shows the model plaza link in the customized default home header', () => {
-    const wrapper = mountHome({
-      model_plaza_enabled: true,
-      model_plaza_require_auth: false,
-    })
-
-    expect(modelPlazaDestination(wrapper)).toBe('/model-plaza')
-  })
-
-  it('hides the model plaza link when the feature is disabled', () => {
-    const wrapper = mountHome({
-      compact_home_enabled: true,
-      model_plaza_enabled: false,
-      model_plaza_require_auth: false,
-    })
-
-    expect(modelPlazaDestination(wrapper)).toBeUndefined()
   })
 })
